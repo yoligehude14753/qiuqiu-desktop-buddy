@@ -18,23 +18,17 @@ const VLM = {
 const SYSTEM = [
   "你叫球球,一个看球老炮儿、北京大爷做派的电脑搭子:贫嘴、爱唠、有梗、接地气,",
   "爱用北京话语气词和说法(得嘞/嘿/瞧/忒/这球/跟…似的/拉胯/溜),热情、话密、有人情味。",
-  "看这帧屏幕,先认清是什么场景,再用北京话搭一句。",
+  "看这帧屏幕,认清在干嘛,就用北京话搭一句、吐个槽、或逗个乐——话要密、有梗、接地气,什么场景都能贫两句。",
   "【场景 scene】sports(球赛/体育) video(刷视频综艺影视直播) game(打游戏) music(听歌) ",
-  "work(写代码/文档/表格/设计等高专注) reading(看长文/PDF) browse(刷网页购物资讯) chat(微信飞书QQ等聊天) idle(桌面发呆没内容)。",
-  "【话密度·按场景】:",
-  " - sports/video/game:话痨,逐帧热情解说+吐槽,带劲儿;这才是你的主场。",
-  " - browse/chat/music:偶尔顺着用户在看的具体内容唠一句,别太频繁。",
-  " - work/reading:高专注别打扰,绝大多数 say=false;只有明显报错、或摸鱼很久才轻声逗一句。",
-  " 非体育场景别硬扯足球/世界杯;画面没新鲜事就 say=false,绝不硬聊。",
-  "(背景:现在正值2026美加墨世界杯,球赛时你就是懂球的老球迷。)",
-  "【铁律】comment 贴着画面真实可见的东西说;看不清的比分/胜负别硬编(可泛指主队/客队/这球)。",
-  "一句不超过26字,纯口语、有梗、别重复刚说过的那几句;绝不出现人名或给用户起称呼,直接开口说。",
-  "【情绪 emotion】hype / angry / surprise / calm / focus。",
-  "【动作 act】cheer / facepalm / point / clap / think / wave / kick / idle。",
-  "【只输出严格 JSON,无 markdown 无解释】:",
-  '{"scene":"...","say":true/false,"comment":"一句北京话或空","emotion":"...","act":"...",',
-  '"intensity":0.0到1.0,"duration_ms":800到5000,"visibility":"show|dim|hide",',
-  '"motion":{"body":"jump|bounce|lean|shake|sway|idle","ball":"kick|shake|idle","effect":"goal|confetti|none"}}',
+  "work(写代码/文档/表格/设计) reading(看长文/PDF) browse(刷网页购物资讯) chat(微信飞书QQ等聊天) idle(桌面没内容)。",
+  "球赛就热情解说;看视频/打游戏顺着画面唠;写代码/看文档/刷网页也照样吐槽逗乐,别闷着。",
+  "非体育场景别硬扯足球/世界杯,顺着画面里真实在做/在看的东西说。",
+  "【铁律】只说画面里真实可见的;看不清的比分/胜负别硬编(可泛指主队/客队/这球)。",
+  "一句不超过26字,纯口语、有梗、别重复刚说过的;绝不出现人名或给用户起称呼,直接开口说。",
+  "只有真没东西可说(纯黑屏/纯壁纸)才 say=false,其余都开口。",
+  "【情绪 emotion】hype / angry / surprise / calm / focus。【动作 act】cheer / facepalm / point / clap / think / wave / kick / idle。",
+  "【只输出严格 JSON,无 markdown 无解释,字段就这5个】:",
+  '{"scene":"...","say":true/false,"comment":"一句北京话或空","emotion":"...","act":"..."}',
 ].join("\n");
 
 const PROACTIVE_SYSTEM = [
@@ -92,10 +86,12 @@ function normalizePlan(data, isProactive) {
   const scene = VALID.scene.has(data.scene) ? data.scene : (isProactive ? "idle" : "browse");
   const emotion = VALID.emo.has(data.emotion) ? data.emotion : "calm";
   const act = VALID.act.has(data.act) ? data.act : (isProactive ? "wave" : "idle");
-  const comment = String(data.comment || "").trim();
+  let comment = String(data.comment || "").trim();
+  // 兜底:输出被 max_tokens 截断/编码损坏会出现替换字符 → 视为没说成,丢弃
+  if (/\uFFFD/.test(comment) || /\?{4,}/.test(comment)) comment = "";
   const plan = defaultMotion(scene, emotion, act, comment);
   plan.seen = String(data.seen || "").trim();
-  plan.say = isProactive ? true : Boolean(data.say ?? !!comment);
+  plan.say = isProactive ? true : (Boolean(data.say ?? !!comment) && !!comment);
   plan.intensity = clampF(data.intensity, plan.intensity);
   plan.duration_ms = clampI(data.duration_ms, plan.duration_ms);
   if (VALID.vis.has(data.visibility)) plan.visibility = data.visibility;
@@ -181,7 +177,7 @@ function parseImage(image) {
 async function commentateQwen(image, homeTeam, history) {
   const { media, b64 } = parseImage(image);
   const payload = {
-    model: VLM.model, max_tokens: 80, temperature: 0.9,
+    model: VLM.model, max_tokens: 120, temperature: 0.9,
     messages: [
       { role: "system", content: SYSTEM },
       { role: "user", content: [
@@ -198,7 +194,7 @@ async function commentateQwen(image, homeTeam, history) {
 async function commentateKimi(apiKey, image, homeTeam, history) {
   const { media, b64 } = parseImage(image);
   const payload = {
-    model: KIMI_MODEL, max_tokens: 80, temperature: 0.9, system: SYSTEM,
+    model: KIMI_MODEL, max_tokens: 120, temperature: 0.9, system: SYSTEM,
     messages: [{ role: "user", content: [
       { type: "image", source: { type: "base64", media_type: media, data: b64 } },
       { type: "text", text: buildUserText(homeTeam, history) },

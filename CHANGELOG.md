@@ -6,6 +6,10 @@
 - Removed the change-detection gating, similarity-dedup and time cooldowns added earlier (they made it feel dumb and stuck). Per-frame commentary again; quiet on work is handled by the prompt's say=false.
 - Audio now returns inline with the comment (server-side synth), so text and voice arrive together instead of the bubble showing long before the voice. (TTS model unchanged: cosyvoice-v2 / longxiaochun_v2 — the earlier slowness was the relay + a separate client TTS round-trip.)
 - Kept a minimal exact-repeat guard so the very same line is never spoken twice in a row.
+- Removed the per-scene silencing/dimming (no more "quiet on work / idle") — it talks in every scene now (quiet only on a truly blank screen).
+- Slimmed the model output to 5 fields and raised the token headroom, fixing the garbled "????" bubble (truncated multibyte output) and speeding generation.
+- Bubble now shows the instant the comment returns (voice follows ~2s via the gateway) and startup delay was cut, so first output appears quickly.
+- Speak filter skips near-duplicate lines (so a frozen/replay frame won't spam the same sentence) while live footage still flows with variety.
 
 ## 0.9.3
 

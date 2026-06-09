@@ -392,15 +392,28 @@ function showBubble(text) {
   clearTimeout(showBubble._t); showBubble._t = setTimeout(() => bubble.classList.remove("show"), 8000);
 }
 
-// 看屏节奏(ms):6/7 老炮儿话痨——动态场景跟得勤、逐帧解说;work/reading 由 prompt 自己 say=false 安静。
-const SCENE_INTERVAL = { sports: 2500, video: 4000, game: 4000, music: 9000, browse: 5000, chat: 6000, work: 12000, reading: 12000, idle: 12000 };
+// 看屏节奏(ms):老炮儿话痨,什么场景都常搭话(球赛最勤);不再给 work/idle 特殊拉长。
+const SCENE_INTERVAL = { sports: 2500, video: 4000, game: 4000, music: 6000, browse: 5000, chat: 5000, work: 6000, reading: 6000, idle: 7000 };
 
-// 只挡"和最近一两句完全相同"的极端重复;变化由 temperature 0.9 + history 自然产生(6/7 的做法)。
+// 防重复(只在"要不要开口"时用,不静默不拦看屏):新这句和最近几句太像就先不说,等画面变出新内容再说。
+// 直播画面在变 → 每句都新 → 照说(话痨);画面定住/重放 → 老吐一句 → 后面压住,不刷屏。
 function _normC(s) { return String(s || "").replace(/[\s，。！!,.~、…?？:：;；"'"']+/g, "").trim(); }
-function isExactRepeat(comment) {
+function _bigrams(s) { const g = new Set(); for (let i = 0; i < s.length - 1; i++) g.add(s.slice(i, i + 2)); return g; }
+function tooSimilarToRecent(comment) {
   const c = _normC(comment);
-  if (!c) return false;
-  return speakHistory.slice(-2).some(h => _normC(h) === c);
+  if (!c) return true;
+  for (const h of speakHistory.slice(-4)) {
+    const x = _normC(h);
+    if (!x) continue;
+    if (x === c) return true;
+    const short = x.length <= c.length ? x : c, long = x.length <= c.length ? c : x;
+    if (short.length >= 5 && long.includes(short)) return true;
+    const ga = _bigrams(x), gb = _bigrams(c); let inter = 0;
+    ga.forEach(g => { if (gb.has(g)) inter++; });
+    const uni = ga.size + gb.size - inter;
+    if (uni > 0 && inter / uni > 0.6) return true;
+  }
+  return false;
 }
 let curScene = "browse";
 let stealthTimer = null;
@@ -414,12 +427,8 @@ function applyStealth(scene) {
     if (charEl) charEl.src = poseImg("calm");
   }
   ballEl.style.display = soccerMode ? "block" : "none";
-  // 高专注工作:进入"安静模式"——缩小、半透明,但始终清晰可见可点,不再消失。
-  if (scene === "work" || scene === "reading") {
-    applyVisibility("dim");
-  } else {
-    applyVisibility("show");
-  }
+  // 不再按场景静默/淡化(用户反馈是负向优化):任何场景都保持清晰可见、照常搭话。
+  applyVisibility("show");
 }
 
 // 自调度:每次看屏「完成后」再排下一次,绝不堆积(看屏 ~4-5s,固定 interval 会撞车)。
@@ -450,11 +459,9 @@ async function tick() {
       scene = "idle"; petLog(`capture empty perm=${cap && cap.permission}`); return;
     }
     const prevScene = AUTONOMY.lastScene;
-    // 6/7 话痨:逐帧看屏,要不要说由模型 say 决定(work 它自己会安静);声音随文本一起返回。
-    const wantAudio = cfg.ttsProvider !== "system" && cfg.speak && !cfg.mute;
+    // 6/7 话痨:逐帧看屏,什么场景都贫两句(由模型 say 决定;基本只在纯黑屏才闭嘴)。
     const resp = await window.pet.commentate({
-      image: cap.image, homeTeam: TEAMS[curTeam].name, history: speakHistory,
-      provider: cfg.visionProvider, voice: cfg.ttsVoice, speed: cfg.rate / 100, wantAudio,
+      image: cap.image, homeTeam: TEAMS[curTeam].name, history: speakHistory, provider: cfg.visionProvider,
     });
     if (resp.error) {
       statusEl.textContent = resp.error === "no_key" ? "未配置Key" : "✕";
@@ -473,14 +480,13 @@ async function tick() {
 
     // 不该说就只做表情/动作,不出声
     if (!plan.say || !plan.comment) { executeMotion(plan); return; }
-    // 只挡完全重复的那一句(其余靠 temperature 0.9 + history 自然变化)
-    if (isExactRepeat(plan.comment)) { petLog(`skip exact-repeat "${plan.comment.slice(0, 24)}"`); executeMotion(plan); return; }
+    // 和最近几句太像就先不说(画面变出新内容再说),避免刷同一句
+    if (tooSimilarToRecent(plan.comment)) { petLog(`skip similar "${plan.comment.slice(0, 24)}"`); executeMotion(plan); return; }
     AUTONOMY.lastSpeak = Date.now();
     pushHistory(plan.comment, plan.emotion);
-    showBubble(plan.comment);
+    showBubble(plan.comment); // 气泡秒出(不等 TTS)
     executeMotion(plan);
-    // 声画同到:优先播服务端返回的音频;没有则回退系统语音。
-    if (resp.audio) playAudioDataUrl(resp.audio); else speak(plan.comment);
+    speak(plan.comment);      // 语音随后(走公网网关 ~2s)
   } catch (e) { statusEl.textContent = "✕"; petLog(`tick exception: ${e && e.message || e}`); console.error(e); }
   finally {
     busy = false;
@@ -543,7 +549,7 @@ async function autoStart() {
   try { const c = await window.pet.getConfig(); hasKey = !!c.hasKey; } catch (_) { hasKey = false; }
   if (needsKey() && !hasKey) { openKeyPanel(); return; }
   checkScreenPermission();
-  if (cfg.auto) setTimeout(() => startWatching(), 2500);
+  if (cfg.auto) setTimeout(() => startWatching(), 600);
 }
 
 // ---- 面板:设置 / 历史统计 ----
