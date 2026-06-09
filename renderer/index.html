@@ -103,16 +103,21 @@
   <div class="panel" id="settingsPanel">
     <h3>设置 <span class="x" data-close="settingsPanel">✕</span></h3>
     <div class="keybox">
-      <label>Kimi API Key（填一个就能用）</label>
-      <input id="kimiKey" type="password" placeholder="粘贴你自己生成的 Kimi Key（sk-...）"/>
+      <label>看屏模型</label>
+      <select id="visionProvider">
+        <option value="qwen3">Qwen3-VL（默认·内置·快·免Key）</option>
+        <option value="k2.6">Kimi K2.6（云端·需自带Key）</option>
+      </select>
+      <label style="margin-top:6px">Kimi API Key（仅 K2.6 需要）</label>
+      <input id="kimiKey" type="password" placeholder="选 K2.6 时粘贴你的 Kimi Key（sk-...）"/>
       <div class="key-actions">
         <button id="saveKey">保存</button>
         <button class="secondary" id="testKey">测试</button>
         <span id="keyStatus">未检测</span>
       </div>
       <div style="font-size:11px;color:#7d8590;line-height:1.5">
-        看屏理解走 Kimi、语音走内置 CosyVoice，端点都已内置。<br/>
-        没有 Key？去 platform.moonshot.cn 自助生成，粘贴到这里即可。
+        默认 Qwen3-VL 与语音都已内置（heyi 服务），开箱即用、无需任何 Key。<br/>
+        想用 Kimi K2.6 看屏时，去 platform.moonshot.cn 生成 Key 粘到上面。
       </div>
     </div>
     <div class="row"><label>看屏频率</label>

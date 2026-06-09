@@ -121,10 +121,12 @@ function frameStats(nativeImg) {
 }
 
 // 抓屏:遍历所有显示器,挑"信息量最大"的一帧(方差高=有窗口/内容),解决多屏只抓主屏的问题。
+// 关键:压到 ~900px + JPEG,大幅降低上传与 VLM 视觉编码耗时(实测 1280PNG 6-13s → 900JPEG ~2s)。
+const CAP_MAX_EDGE = 900;
 async function captureBestScreen() {
   const displays = screen.getAllDisplays();
-  const maxEdge = displays.reduce((m, d) => Math.max(m, d.size.width, d.size.height), 1280);
-  const scale = Math.min(1, 1280 / maxEdge);
+  const maxEdge = displays.reduce((m, d) => Math.max(m, d.size.width, d.size.height), CAP_MAX_EDGE);
+  const scale = Math.min(1, CAP_MAX_EDGE / maxEdge);
   const sources = await desktopCapturer.getSources({
     types: ["screen"],
     thumbnailSize: {
@@ -146,7 +148,8 @@ async function captureBestScreen() {
 
   // 空帧判定:方差极低(全黑或纯色壁纸,通常意味着没拿到窗口内容/未授权)
   const empty = best.st.variance < 40;
-  return { image: best.source.thumbnail.toDataURL(), empty, stats: best.st };
+  const jpeg = best.source.thumbnail.toJPEG(70);
+  return { image: "data:image/jpeg;base64," + jpeg.toString("base64"), empty, stats: best.st };
 }
 
 // 渲染进程请求抓全屏 → 返回 { image, empty, permission }
@@ -170,6 +173,20 @@ ipcMain.handle("capture-screen", async () => {
       win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     }
   }
+});
+
+// 轻量运行日志:写到 userData/buddy.log(自动截断到 ~256KB),便于排查看屏节奏/延迟。
+function logPath() { return path.join(app.getPath("userData"), "buddy.log"); }
+ipcMain.on("buddy-log", (e, line) => {
+  try {
+    const f = logPath();
+    const stamp = new Date().toISOString().replace("T", " ").slice(0, 19);
+    fs.appendFileSync(f, `${stamp} ${String(line).slice(0, 500)}\n`);
+    if (fs.statSync(f).size > 256 * 1024) {
+      const tail = fs.readFileSync(f, "utf8").slice(-128 * 1024);
+      fs.writeFileSync(f, tail);
+    }
+  } catch (_) {}
 });
 
 // 屏幕录制权限:查询 + 打开系统设置面板(macOS)
@@ -199,8 +216,10 @@ ipcMain.handle("set-config", (e, patch) => {
   saveConfig(userConfig);
   return { ok: true, hasKey: !!userConfig.kimiKey };
 });
-ipcMain.handle("test-key", async (e, key) => {
-  try { await kimi.testKey(key || userConfig.kimiKey); return { ok: true }; }
+ipcMain.handle("test-key", async (e, arg) => {
+  const provider = (arg && arg.provider) || "qwen3";
+  const key = (arg && arg.key) || (typeof arg === "string" ? arg : "") || userConfig.kimiKey;
+  try { await kimi.testProvider({ provider, kimiKey: key }); return { ok: true }; }
   catch (err) { return { ok: false, error: String(err.message || err) }; }
 });
 
@@ -261,9 +280,10 @@ ipcMain.handle("synthesize-speech", async (e, args) => {
 });
 
 // ---- Kimi 代理:看屏解说 / 主动说话(在主进程发请求,避开浏览器 CORS) ----
-ipcMain.handle("commentate", async (e, { image, homeTeam, history }) => {
-  if (!userConfig.kimiKey) return { error: "no_key" };
-  try { return { plan: await kimi.commentate(userConfig.kimiKey, image, homeTeam, history) }; }
+ipcMain.handle("commentate", async (e, { image, homeTeam, history, provider }) => {
+  const prov = provider || "qwen3";
+  if (prov === "k2.6" && !userConfig.kimiKey) return { error: "no_key" };
+  try { return { plan: await kimi.commentate({ provider: prov, kimiKey: userConfig.kimiKey, image, homeTeam, history }) }; }
   catch (err) { return { error: String(err.message || err) }; }
 });
 ipcMain.handle("proactive", async (e, { trigger, homeTeam, history }) => {

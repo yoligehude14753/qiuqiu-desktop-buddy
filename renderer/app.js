@@ -4,12 +4,19 @@ let hasKey = false;
 // ---- 设置(本地持久化) ----
 const DEFAULTS = {
   interval: 5000, vol: 90, mute: false, auto: true, speak: true, team: "default", runtime: "sprite",
+  // 看屏模型:qwen3(默认,heyi 本地 VLM,无需 Key,快) / k2.6(云端 Kimi,需用户 Key)
+  visionProvider: "qwen3",
   // 语音服务端点已内置(主进程 heyi CosyVoice),这里只留用户可选的音色/语速。
   ttsProvider: "cosyvoice", ttsVoice: "longxiaochun_v2", systemVoice: "", rate: 100, pitch: 105,
 };
+// k2.6 才需要用户填 Kimi Key;qwen3 默认走内置网关,开箱即用。
+function needsKey() { return cfg.visionProvider === "k2.6"; }
 let cfg = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem("kanqiu_cfg") || "{}"));
 if (cfg.runtime === "rig") cfg.runtime = "sprite"; // 移除惊悚的骨骼切块版
 function saveCfg() { localStorage.setItem("kanqiu_cfg", JSON.stringify(cfg)); }
+
+// 轻量日志:写到主进程 userData/buddy.log,便于排查"看屏频率/延迟/说了啥"。
+function petLog(s) { try { window.pet.log && window.pet.log(String(s)); } catch (_) {} }
 
 let running = false, busy = false, timer = null;
 const player = document.getElementById("player");
@@ -390,62 +397,61 @@ function applyStealth(scene) {
   }
 }
 
-function rescheduleByScene(scene) {
-  const want = SCENE_INTERVAL[scene] || cfg.interval;
-  // 用户设的间隔作为下限的参考,场景间隔优先(但不短于用户设的最小)
-  const ms = Math.max(want, scene === "sports" ? cfg.interval : want);
-  if (running) { clearInterval(timer); timer = setInterval(tick, ms); }
+// 自调度:每次看屏「完成后」再排下一次,绝不堆积(看屏 ~4-5s,固定 interval 会撞车)。
+// 球赛跟得紧,工作/阅读拉长少打扰。
+let loopTimer = null;
+const SPORTS_GAP = 2500;
+function scheduleNext(scene) {
+  clearTimeout(loopTimer);
+  if (!running) return;
+  const base = SCENE_INTERVAL[scene] || cfg.interval;
+  const gap = scene === "sports" ? Math.min(base, SPORTS_GAP) : Math.max(base, cfg.interval);
+  loopTimer = setTimeout(tick, gap);
 }
 
+// 唯一的发声来源:看屏。读懂画面 → 该说才说(plan.say),否则只动不说,绝不"没话找话"。
 async function tick() {
   if (busy || !running) return;
   busy = true;
+  let scene = curScene;
+  let reschedule = true;
+  const t0 = Date.now();
   try {
     statusEl.textContent = "👀";
-    if (!hasKey) { busy = false; openKeyPanel(); return; }
+    if (needsKey() && !hasKey) { openKeyPanel(); reschedule = false; return; }
     const cap = await window.pet.captureScreen();
-    if (!cap || !cap.image) {
-      // 拿不到画面:多半是 macOS 没给"屏幕录制"权限 → 引导授权
-      if (cap && (cap.permission === "denied" || cap.permission === "restricted" || cap.empty)) {
-        warnScreenPermission();
-      }
-      busy = false; return;
+    if (!cap || !cap.image || cap.empty) {
+      if (cap && (cap.permission === "denied" || cap.permission === "restricted" || cap.empty)) warnScreenPermission();
+      scene = "idle"; petLog(`capture empty perm=${cap && cap.permission}`); return;
     }
-    if (cap.empty) {
-      // 抓到了但几乎没内容(纯黑/纯壁纸),通常是没授权或没窗口 → 提示一次,本轮不打扰
-      warnScreenPermission();
-      busy = false; return;
-    }
-    const img = cap.image;
-    const resp = await window.pet.commentate({ image: img, homeTeam: TEAMS[curTeam].name, history: speakHistory });
+    const resp = await window.pet.commentate({ image: cap.image, homeTeam: TEAMS[curTeam].name, history: speakHistory, provider: cfg.visionProvider });
     if (resp.error) {
       statusEl.textContent = resp.error === "no_key" ? "未配置Key" : "✕";
-      if (resp.error === "no_key") openKeyPanel();
-      busy = false; return;
+      petLog(`commentate error: ${resp.error}`);
+      if (resp.error === "no_key") { openKeyPanel(); reschedule = false; }
+      return;
     }
     const plan = resp.plan || {};
-    const d = { scene: plan.scene, skip: !plan.say, comment: plan.say ? plan.comment : "",
-                emotion: plan.emotion, act: plan.act, motion: plan };
-    const newScene = d.scene || "browse";
-    onSceneChanged(AUTONOMY.lastScene, newScene);
-    AUTONOMY.lastScene = newScene;
-    applyStealth(newScene);
-    rescheduleByScene(newScene);
-    statusEl.textContent = (d.scene || "") + (d.timing ? " " + d.timing.total + "s" : "");
+    scene = plan.scene || "browse";
+    const dt = ((Date.now() - t0) / 1000).toFixed(1);
+    onSceneChanged(AUTONOMY.lastScene, scene);
+    AUTONOMY.lastScene = scene;
+    applyStealth(scene);
+    statusEl.textContent = `${scene} ${dt}s`;
+    petLog(`scene=${scene} say=${plan.say} ${dt}s seen="${(plan.seen || "").slice(0, 40)}" comment="${(plan.comment || "").slice(0, 40)}"`);
 
-    if (d.skip || !d.comment) {
-      // 该闭嘴:专注工作就保持隐身待机,不说话
-      if (d.motion) executeMotion(d.motion);
-      else if (d.scene !== "work" && d.scene !== "reading") react("calm", "idle");
-      busy = false; return;
-    }
+    // 不该说就只做表情/动作,不出声(工作/阅读连动作都收着)
+    if (!plan.say || !plan.comment) { executeMotion(plan); return; }
     AUTONOMY.lastSpeak = Date.now();
-    pushHistory(d.comment, d.emotion);
-    showBubble(d.comment);
-    executeMotion(d.motion || { emotion: d.emotion || "calm", act: d.act || "idle" });
-    speak(d.comment);
-  } catch (e) { statusEl.textContent = "✕"; console.error(e); }
-  busy = false;
+    pushHistory(plan.comment, plan.emotion);
+    showBubble(plan.comment);
+    executeMotion(plan);
+    speak(plan.comment);
+  } catch (e) { statusEl.textContent = "✕"; petLog(`tick exception: ${e && e.message || e}`); console.error(e); }
+  finally {
+    busy = false;
+    if (reschedule && running) scheduleNext(scene);
+  }
 }
 
 // 屏幕录制权限引导:抓不到画面时提示并引导去系统设置开权限(节流,避免反复弹)
@@ -474,7 +480,7 @@ async function checkScreenPermission() {
 
 let autonomyTimer = null, idleTimer = null;
 async function startWatching() {
-  if (!hasKey) {
+  if (needsKey() && !hasKey) {
     statusEl.textContent = "未配置Key";
     openKeyPanel();
     return;
@@ -483,23 +489,25 @@ async function startWatching() {
   AUTONOMY.sessionStart = Date.now(); AUTONOMY.lastSpeak = Date.now(); AUTONOMY.lastScene = null;
   STATS.sessions = (STATS.sessions || 0) + 1; saveStats();
   toggleBtn.textContent = "❚❚"; toggleBtn.className = "btn pause";
-  tick(); clearInterval(timer); timer = setInterval(tick, cfg.interval);
-  clearInterval(autonomyTimer); autonomyTimer = setInterval(autonomyTick, 20000);
+  petLog("start watching");
+  // 自调度循环:tick 跑完再排下一次。只留"安静微动作",不再有主动唠嗑引擎。
+  clearTimeout(loopTimer); tick();
   clearInterval(idleTimer); idleTimer = setInterval(idleMicroMotion, 12000);
   statusEl.textContent = "陪看中";
 }
 function stopWatching() {
   running = false;
   toggleBtn.textContent = "▶"; toggleBtn.className = "btn play";
-  clearInterval(timer); clearInterval(autonomyTimer); clearInterval(idleTimer);
+  clearTimeout(loopTimer); clearInterval(idleTimer);
   flushWatchTime();
+  petLog("stop watching");
   statusEl.textContent = "暂停";
 }
 async function autoStart() {
   statusEl.textContent = "待命";
   // 读取 Key 状态:没配则弹配置面板,不自动开始。
   try { const c = await window.pet.getConfig(); hasKey = !!c.hasKey; } catch (_) { hasKey = false; }
-  if (!hasKey) { openKeyPanel(); return; }
+  if (needsKey() && !hasKey) { openKeyPanel(); return; }
   checkScreenPermission();
   if (cfg.auto) setTimeout(() => startWatching(), 2500);
 }
@@ -524,7 +532,7 @@ async function refreshKeyUI() {
     hasKey = !!c.hasKey;
     const input = document.getElementById("kimiKey");
     if (input && c.kimiKey && !input.value) input.value = c.kimiKey;
-    setKeyStatus(hasKey ? "已保存" : "未配置", hasKey);
+    setKeyStatus(needsKey() ? (hasKey ? "已保存" : "未配置") : "Qwen3 无需 Key", needsKey() ? hasKey : true);
   } catch (_) {
     hasKey = false;
     setKeyStatus("读取失败", false);
@@ -576,6 +584,7 @@ function syncSettingsUI() {
   document.getElementById("speak").checked = cfg.speak;
   document.getElementById("team").value = curTeam;
   document.querySelectorAll("#runtimeSeg button").forEach(b => b.classList.toggle("on", b.dataset.v === cfg.runtime));
+  const vp = document.getElementById("visionProvider"); if (vp) vp.value = cfg.visionProvider;
   const tp = document.getElementById("ttsProvider"); if (tp) tp.value = cfg.ttsProvider;
   const tv = document.getElementById("ttsVoice"); if (tv) tv.value = cfg.ttsVoice;
   const rt = document.getElementById("rate"); if (rt) rt.value = cfg.rate;
@@ -587,7 +596,7 @@ document.querySelectorAll("#runtimeSeg button").forEach(b => b.onclick = async (
 });
 document.querySelectorAll("#intervalSeg button").forEach(b => b.onclick = () => {
   cfg.interval = +b.dataset.v; saveCfg(); syncSettingsUI();
-  if (running) { clearInterval(timer); timer = setInterval(tick, cfg.interval); }
+  // 自调度循环会在下次 scheduleNext 时读取新的 interval,无需重启定时器。
 });
 document.getElementById("vol").oninput = (e) => { cfg.vol = +e.target.value; player.volume = cfg.vol/100; saveCfg(); };
 document.getElementById("mute").onchange = (e) => { cfg.mute = e.target.checked; saveCfg(); };
@@ -620,13 +629,19 @@ document.getElementById("saveKey").onclick = async () => {
   if (hasKey) showBubble("Key 已保存，可以开始陪你了。");
 };
 document.getElementById("testKey").onclick = async () => {
+  const provider = cfg.visionProvider;
   const key = document.getElementById("kimiKey").value.trim();
-  if (!key) { setKeyStatus("请先填写 Key", false); return; }
+  if (provider === "k2.6" && !key) { setKeyStatus("K2.6 需先填 Key", false); return; }
   setKeyStatus("测试中...", true);
-  const r = await window.pet.testKey(key);
+  const r = await window.pet.testKey({ provider, key });
   setKeyStatus(r.ok ? "测试通过" : "测试失败", !!r.ok);
-  if (!r.ok) showBubble("Key 测试失败，检查一下是否填对。");
+  if (!r.ok) showBubble("看屏模型连不上，检查 Key 或网络。");
 };
+document.getElementById("visionProvider")?.addEventListener("change", (e) => {
+  cfg.visionProvider = e.target.value; saveCfg(); syncSettingsUI();
+  setKeyStatus(needsKey() ? (hasKey ? "已保存" : "K2.6 需填 Key") : "Qwen3 无需 Key", needsKey() ? hasKey : true);
+  showBubble(needsKey() ? "切到 Kimi K2.6，需要填你的 Key。" : "切回 Qwen3，本地看屏，开箱即用。");
+});
 
 // ============ 自主行为引擎(融合 animo behavior-engine + Open-LLM-VTuber 主动说话)============
 const AUTONOMY = {
@@ -678,12 +693,10 @@ function autonomyTick() {
   proactive(pick.id);
 }
 
-// 场景切换感知:scene 变化时顺口搭话(work/reading 不打扰)
+// 场景切换感知:只记录,不主动搭话(发声只由看屏 commentate 决定)。
 function onSceneChanged(prev, next) {
   if (!prev || prev === next) return;
-  if (next === "work" || next === "reading" || next === "idle") return;
-  if (Date.now() - AUTONOMY.lastSpeak < 30e3) return;
-  proactive("scene_change", `从${prev}切到了${next}`);
+  petLog(`scene change: ${prev} -> ${next}`);
 }
 
 // 闲置微动作:安静时偶尔做个小动作(看一眼/思考),更"活"
@@ -698,12 +711,8 @@ function idleMicroMotion() {
   }
 }
 
-// 回到屏幕欢迎
-let wasHidden = false;
-document.addEventListener("visibilitychange", () => {
-  if (document.hidden) { wasHidden = true; }
-  else if (wasHidden) { wasHidden = false; if (running) setTimeout(() => proactive("greeting"), 800); }
-});
+// 注意:截屏时主进程会 win.hide()/show(),会触发 visibilitychange。
+// 过去这里挂了"回来啦"问候,导致每个截屏周期都刷一句废话——已移除,不再主动问候。
 
 toggleBtn.onclick = () => { running ? stopWatching() : startWatching(); };
 window.pet.onToggleRunning(() => { running ? stopWatching() : startWatching(); });

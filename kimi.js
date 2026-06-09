@@ -1,10 +1,19 @@
-// 主进程 Kimi K2.6 客户端:看屏理解 + 电脑搭子解说 + 动作计划。
-// 在 Node 环境里直连 api.kimi.com(无浏览器 CORS 限制),Key 由用户配置。
+// 主进程看屏客户端:支持两种视觉模型(看屏理解 + 解说 + 动作计划)。
+//  - qwen3(默认): heyi-bj 本地 Qwen3-VL-8B,经 Cloudflare 公网网关,内置 token,无需用户 Key,实测 ~2s。
+//  - k2.6: 云端 Kimi K2.6(api.kimi.com),需用户自带 Kimi Key。
 const https = require("https");
 
 const KIMI_HOST = "api.kimi.com";
 const KIMI_PATH = "/coding/v1/messages";
 const KIMI_MODEL = "kimi-k2.6";
+
+// 内置 VLM 端点(封装进 app):heyi Qwen3-VL-8B 公网网关 + 网关 token。
+const VLM = {
+  host: "llm.yoliyoli.uk",
+  path: "/vl/v1/chat/completions",
+  model: "Qwen3-VL-8B",
+  token: "__GATEWAY_TOKEN_REMOVED__",
+};
 
 const SYSTEM = [
   "你叫球球,一个机灵贴心的电脑搭子(办公/上网/娱乐都陪),是用户的桌面伙伴。",
@@ -129,23 +138,82 @@ function kimiRequest(apiKey, payload, timeoutMs = 45000) {
   });
 }
 
-// 看屏解说:image 为 dataURL,返回 motion plan
-async function commentate(apiKey, image, homeTeam, history) {
-  const m = /^data:(image\/\w+);base64,(.*)$/s.exec(image || "");
-  const media = m ? m[1] : "image/jpeg";
-  const b64 = m ? m[2] : image;
+// OpenAI 兼容请求(发到 Qwen3-VL 网关),返回模型文本
+function qwenRequest(payload, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify(payload);
+    const req = https.request({
+      host: VLM.host, path: VLM.path, method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${VLM.token}`,
+        "Content-Length": Buffer.byteLength(body),
+      },
+    }, (res) => {
+      let buf = "";
+      res.on("data", (c) => (buf += c));
+      res.on("end", () => {
+        if (res.statusCode >= 400) return reject(new Error(`VLM ${res.statusCode}: ${buf.slice(0, 200)}`));
+        try {
+          const j = JSON.parse(buf);
+          const msg = (j.choices && j.choices[0] && j.choices[0].message) || {};
+          resolve(msg.content || msg.reasoning_content || "");
+        } catch (e) { reject(e); }
+      });
+    });
+    req.on("error", reject);
+    req.setTimeout(timeoutMs, () => { req.destroy(new Error("VLM 请求超时")); });
+    req.write(body);
+    req.end();
+  });
+}
+
+function buildUserText(homeTeam, history) {
   const hist = history && history.length ? history.join(" / ") : "(刚开始)";
   const teamLine = homeTeam ? `用户给${homeTeam}应援,球赛时你也向着${homeTeam}。` : "";
-  const txt = `${teamLine}你刚说过:${hist}。先看清这帧截图里到底是什么(填 seen),再据此判断 scene、要不要开口。给 JSON。`;
+  return `${teamLine}你刚说过:${hist}。先看清这帧截图里到底是什么(填 seen),再据此判断 scene、要不要开口。给 JSON。`;
+}
+function parseImage(image) {
+  const m = /^data:(image\/\w+);base64,(.*)$/s.exec(image || "");
+  return { media: m ? m[1] : "image/jpeg", b64: m ? m[2] : image };
+}
+
+// 看屏解说(Qwen3-VL,默认):image 为 dataURL,返回 motion plan
+async function commentateQwen(image, homeTeam, history) {
+  const { media, b64 } = parseImage(image);
+  const payload = {
+    model: VLM.model, max_tokens: 300, temperature: 0.4,
+    messages: [
+      { role: "system", content: SYSTEM },
+      { role: "user", content: [
+        { type: "image_url", image_url: { url: `data:${media};base64,${b64}` } },
+        { type: "text", text: buildUserText(homeTeam, history) },
+      ] },
+    ],
+  };
+  const raw = await qwenRequest(payload);
+  return normalizePlan(extractJson(raw), false) || defaultMotion("browse", "calm", "idle", "");
+}
+
+// 看屏解说(Kimi K2.6):image 为 dataURL,返回 motion plan
+async function commentateKimi(apiKey, image, homeTeam, history) {
+  const { media, b64 } = parseImage(image);
   const payload = {
     model: KIMI_MODEL, max_tokens: 300, temperature: 0.5, system: SYSTEM,
     messages: [{ role: "user", content: [
       { type: "image", source: { type: "base64", media_type: media, data: b64 } },
-      { type: "text", text: txt },
+      { type: "text", text: buildUserText(homeTeam, history) },
     ] }],
   };
   const raw = await kimiRequest(apiKey, payload);
   return normalizePlan(extractJson(raw), false) || defaultMotion("browse", "calm", "idle", "");
+}
+
+// 看屏解说调度:provider 选 qwen3(默认) / k2.6
+async function commentate(opts) {
+  const { provider, kimiKey, image, homeTeam, history } = opts || {};
+  if (provider === "k2.6" || provider === "kimi") return commentateKimi(kimiKey, image, homeTeam, history);
+  return commentateQwen(image, homeTeam, history);
 }
 
 async function proactive(apiKey, trigger, homeTeam, history) {
@@ -165,4 +233,17 @@ async function testKey(apiKey) {
   return Boolean(raw);
 }
 
-module.exports = { commentate, proactive, testKey };
+async function testQwen() {
+  const payload = { model: VLM.model, max_tokens: 5, temperature: 0, messages: [{ role: "user", content: "说ok" }] };
+  const raw = await qwenRequest(payload, 15000);
+  return Boolean(raw);
+}
+
+// 按 provider 测试连通性
+async function testProvider(opts) {
+  const { provider, kimiKey } = opts || {};
+  if (provider === "k2.6" || provider === "kimi") return testKey(kimiKey);
+  return testQwen();
+}
+
+module.exports = { commentate, commentateQwen, commentateKimi, proactive, testKey, testQwen, testProvider };

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.3
+
+- Default screen-reading model is now the local Qwen3-VL-8B (heyi-bj) via the Cloudflare gateway: fast (~2s) and needs no user key. Kimi K2.6 is now an optional choice (requires your own key) selectable in settings.
+- Removed the proactive "small-talk" engine. It was firing greeting/curiosity filler every capture cycle (the screenshot-hide triggered a fake "回来啦/想我没" each time). The buddy now only speaks based on what's actually on screen — event-driven, never filler.
+- Self-paced capture loop: the next frame is scheduled only after the previous one finishes, so short intervals no longer pile up requests.
+- Capture downscaled to ~900px JPEG, cutting vision latency from 6-13s (1280px PNG) to ~2s.
+- Added a local buddy.log (in the app data dir) recording scene/say/latency for diagnosis.
+
 ## 0.9.2
 
 - Fixed the core "can't understand the screen" issue: detect macOS Screen Recording permission and guide the user to grant it when frames come back empty.

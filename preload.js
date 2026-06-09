@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld("pet", {
   captureScreen: () => ipcRenderer.invoke("capture-screen"),
   screenPermission: () => ipcRenderer.invoke("screen-permission"),
   openScreenSettings: () => ipcRenderer.invoke("open-screen-settings"),
+  log: (line) => ipcRenderer.send("buddy-log", line),
   commentate: (args) => ipcRenderer.invoke("commentate", args),
   proactive: (args) => ipcRenderer.invoke("proactive", args),
   synthesizeSpeech: (args) => ipcRenderer.invoke("synthesize-speech", args),
