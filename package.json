@@ -1,13 +1,13 @@
 {
   "name": "qiuqiu-desktop-buddy",
-  "version": "0.9.1",
+  "version": "0.9.6",
   "description": "球球 · 桌面电脑搭子",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "dev": "ELECTRON_ENABLE_LOGGING=1 electron .",
-    "pack": "electron-packager . \"球球电脑搭子\" --platform=darwin --arch=arm64 --out=dist --overwrite --app-bundle-id=uk.yoliyoli.qiuqiu --app-version=0.9.1 --ignore='^/dist($|/)'",
-    "dmg": "npm run pack && rm -f \"dist/qiuqiu-desktop-buddy-0.9.1-arm64.dmg\" && hdiutil create -volname \"球球电脑搭子\" -srcfolder \"dist/球球电脑搭子-darwin-arm64/球球电脑搭子.app\" -ov -format UDZO \"dist/qiuqiu-desktop-buddy-0.9.1-arm64.dmg\""
+    "pack": "electron-packager . \"球球电脑搭子\" --platform=darwin --arch=arm64 --out=dist --overwrite --app-bundle-id=uk.yoliyoli.qiuqiu --app-version=0.9.6 --ignore='^/dist($|/)'",
+    "dmg": "npm run pack && rm -f \"dist/qiuqiu-desktop-buddy-0.9.6-arm64.dmg\" && hdiutil create -volname \"球球电脑搭子\" -srcfolder \"dist/球球电脑搭子-darwin-arm64/球球电脑搭子.app\" -ov -format UDZO \"dist/qiuqiu-desktop-buddy-0.9.6-arm64.dmg\""
   },
   "author": "",
   "license": "MIT",

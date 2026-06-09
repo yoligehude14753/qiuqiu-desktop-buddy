@@ -1,68 +1,56 @@
-// 主进程 Kimi K2.6 客户端:看屏理解 + 电脑搭子解说 + 动作计划。
-// 在 Node 环境里直连 api.kimi.com(无浏览器 CORS 限制),Key 由用户配置。
+// 看屏理解层:看这帧屏幕 → 输出 motion plan { scene, say, comment, emotion, act, motion }。
+// prompt 用 6/7 那版原文(中性电脑搭子,只有真球赛才看球;按场景调发话密度;不重复刚说过的)。
+//  - 默认 Qwen3-VL-8B(heyi 本地,经公网网关,免 Key,~2s);可选 Kimi K2.6(需用户 Key)。
 const https = require("https");
 
-const KIMI_HOST = "api.kimi.com";
-const KIMI_PATH = "/coding/v1/messages";
-const KIMI_MODEL = "kimi-k2.6";
-
-const SYSTEM = [
-  "你叫球球,一个机灵贴心的电脑搭子(办公/上网/娱乐都陪),是用户的桌面伙伴。",
-  "你的核心是陪伴用户用电脑的日常,不要张口闭口聊足球。只有当屏幕上确实出现球赛/体育画面时,",
-  "你才切换成懂球的球迷模式热情解说(现在正值2026美加墨世界杯,这是你的特色技能)。",
-  "看这帧屏幕画面,先判断场景,再决定要不要开口、说什么、配什么动作。",
-  "【场景 scene】sports(球赛/体育) / video(刷视频综艺直播) / game(游戏) / music(听歌) /",
-  "work(写代码/文档/表格等高专注) / reading(看长文/PDF) / browse(刷网页购物资讯) / chat(聊天) / idle(发呆)。",
-  "【发话密度】work/reading 基本别打扰,绝大多数 say=false;sports 进入球迷模式热情接话;",
-  "video/game 顺着画面适当插嘴;music 安静偶尔点评;browse/chat 偶尔顺着用户在看的聊;idle 找个轻松日常话头。",
-  "非体育场景一律别主动提足球/世界杯;画面没新鲜变化就 say=false,绝不硬聊。",
-  "【情绪 emotion】hype / angry / surprise / calm / focus。",
-  "【动作 act】cheer / facepalm / point / clap / think / wave / kick / idle。",
-  "说话像好朋友随口聊,热情活泼接地气,一句不超过26字,不书面不列点不重复;绝不出现人名或称呼前缀。",
-  "【只输出严格 JSON,无 markdown 无解释】:",
-  '{"scene":"...","say":true/false,"comment":"一句话或空","emotion":"...","act":"...",',
-  '"intensity":0.0到1.0,"duration_ms":800到5000,"visibility":"show|dim|hide",',
-  '"motion":{"body":"jump|bounce|lean|shake|sway|idle","ball":"kick|shake|idle","effect":"goal|confetti|none"}}',
-].join("\n");
-
-const PROACTIVE_SYSTEM = [
-  "你叫球球,一个机灵贴心的电脑搭子,是用户的桌面伙伴。现在没有具体画面,你主动跟用户唠一句。",
-  "聊日常陪伴(关心/调侃/小建议),别张口就提足球或世界杯。一句不超过22字,不书面不列点。",
-  '【只输出严格 JSON】:{"comment":"一句话","emotion":"hype|angry|surprise|calm|focus",',
-  '"act":"cheer|facepalm|point|clap|think|wave|kick|idle","intensity":0.0到1.0,"duration_ms":800到5000,',
-  '"visibility":"show|dim|hide","motion":{"body":"jump|bounce|lean|shake|sway|idle","ball":"kick|shake|idle","effect":"goal|confetti|none"}}',
-].join("\n");
-
-const PROACTIVE_PROMPTS = {
-  greeting: "用户刚打开你/回到屏幕前,热情打个招呼。",
-  fatigue: "用户已经连续用了挺久了,关心提醒歇会儿眼睛。",
-  night: "现在深夜了,用户还没睡,调侃兼关心一句。",
-  curiosity: "桌面没啥动静,你有点无聊,主动找个轻松日常话头逗用户一下(关心/调侃/小建议),别提足球世界杯。",
-  scene_change: "用户从一个活动切到了另一个,你顺口搭句话。",
+const KIMI = { host: "api.kimi.com", path: "/coding/v1/messages", model: "kimi-k2.6" };
+const VLM = {
+  host: "llm.yoliyoli.uk", path: "/vl/v1/chat/completions", model: "Qwen3-VL-8B",
+  token: "__GATEWAY_TOKEN_REMOVED__",
 };
+
+// ===== 6/7 版原文 prompt(中性,不张口闭口足球;按场景调密度) =====
+const SYSTEM = (
+  "你叫球球,一个机灵贴心的电脑搭子(办公/上网/娱乐都陪),是用户的桌面伙伴。" +
+  "你的核心是陪伴用户用电脑的日常,不要张口闭口聊足球。只有当屏幕上确实出现球赛/体育画面时," +
+  "你才切换成懂球的球迷模式热情解说(现在正值2026美加墨世界杯,这是你的特色技能)。\n" +
+  "看这帧屏幕画面,先判断场景,再决定要不要开口、说什么、配什么动作。\n" +
+  "【场景类型 scene】:sports(球赛/体育直播) / video(刷视频短剧综艺直播) / game(打游戏) / " +
+  "music(听歌/音乐播放器) / work(写代码/文档/表格/设计等高专注工作) / reading(看长文/文档/PDF阅读) / " +
+  "browse(刷网页/购物/资讯) / chat(微信QQ等聊天) / idle(桌面发呆没内容)。\n" +
+  "【发话原则·重要·按场景调密度】:\n" +
+  " - work/reading 高专注:基本别打扰,绝大多数 say=false;只有明显报错或摸鱼很久才偶尔提醒一句。\n" +
+  " - sports:这才进入球迷模式,进球/精彩/争议都热情接话。\n" +
+  " - video/game:适当插插嘴,精彩处搭话,聊的是画面内容本身,不要硬扯足球。\n" +
+  " - music:安静,偶尔点评一句歌。\n" +
+  " - browse/chat:偶尔唠一句,顺着用户在看的东西聊,别太频繁。\n" +
+  " - idle:可以找个轻松话头(日常关心、提个建议),不一定是足球。\n" +
+  " 非体育场景一律不要主动提足球/世界杯;没新鲜事、画面跟刚才一样就 say=false,绝不硬聊。\n" +
+  "【情绪 emotion】:hype(狂喜/进球) / angry(气愤/争议) / surprise(惊讶) / calm(平静) / focus(专注不打扰)。\n" +
+  "【动作 act】:cheer(欢呼跳) / facepalm(捂脸) / point(指点) / clap(鼓掌) / think(托腮思考) / wave(打招呼) / kick(踢球) / idle(待机)。\n" +
+  "说话像好朋友在沙发上随口聊,热情、活泼、接地气、有梗,适度用语气词(哇、绝了、冲啊、稳住);" +
+  "一句话不超过26字,不书面不列点,绝不重复刚说过的那几句。\n" +
+  "【硬规则】绝不在 comment 里出现任何人名,也不给用户起名字或代称,直接开口说话,别加任何称呼前缀。\n" +
+  "【只输出严格 JSON,不要 markdown,不要解释】:\n" +
+  '{"scene":"sports|video|game|music|work|reading|browse|chat|idle","say":true/false,' +
+  '"comment":"一句话,不该说话时为空","emotion":"hype|angry|surprise|calm|focus",' +
+  '"act":"cheer|facepalm|point|clap|think|wave|kick|idle"}'
+);
 
 const VALID = {
   scene: new Set(["sports", "video", "game", "music", "work", "reading", "browse", "chat", "idle"]),
   emo: new Set(["hype", "angry", "surprise", "calm", "focus"]),
   act: new Set(["cheer", "facepalm", "point", "clap", "think", "wave", "kick", "idle"]),
-  body: new Set(["jump", "bounce", "lean", "shake", "sway", "idle"]),
-  ball: new Set(["kick", "shake", "idle"]),
-  effect: new Set(["goal", "confetti", "none"]),
-  vis: new Set(["show", "dim", "hide"]),
 };
 
-function clampF(v, d) { v = Number(v); return isFinite(v) ? Math.max(0, Math.min(1, v)) : d; }
-function clampI(v, d) { v = parseInt(v, 10); return isFinite(v) ? Math.max(500, Math.min(8000, v)) : d; }
-
 function defaultMotion(scene, emotion, act, comment) {
-  const body = { cheer: "jump", clap: "bounce", point: "lean", facepalm: "shake", think: "sway", wave: "sway", kick: "lean" }[act] || "idle";
+  const body = { cheer: "jump", clap: "bounce", point: "lean", facepalm: "shake", think: "sway", wave: "wave", kick: "kick" }[act] || "idle";
   const ball = (act === "cheer" || act === "kick") ? "kick" : (act === "facepalm" ? "shake" : "idle");
   const effect = emotion === "hype" ? "goal" : ((act === "cheer" || act === "clap") ? "confetti" : "none");
   return {
     scene, say: !!comment, comment: comment || "", emotion, act,
-    intensity: emotion === "hype" ? 0.7 : 0.45,
-    duration_ms: emotion === "hype" ? 1800 : 1400,
-    visibility: (scene === "work" || scene === "reading") ? "dim" : "show",
+    intensity: emotion === "hype" ? 0.8 : 0.45,
+    duration_ms: emotion === "hype" ? 1800 : 1300,
     motion: { body, ball, effect },
   };
 }
@@ -75,88 +63,95 @@ function extractJson(raw) {
   try { return JSON.parse(raw); } catch (_) { return null; }
 }
 
-function normalizePlan(data, isProactive) {
+function normalizePlan(data) {
   if (!data || typeof data !== "object") return null;
-  const scene = VALID.scene.has(data.scene) ? data.scene : (isProactive ? "idle" : "browse");
+  const scene = VALID.scene.has(data.scene) ? data.scene : "browse";
   const emotion = VALID.emo.has(data.emotion) ? data.emotion : "calm";
-  const act = VALID.act.has(data.act) ? data.act : (isProactive ? "wave" : "idle");
-  const comment = String(data.comment || "").trim();
+  const act = VALID.act.has(data.act) ? data.act : "idle";
+  let comment = String(data.comment || "").trim();
+  if (comment === "[skip]" || comment === "skip") comment = "";
+  if (/\uFFFD/.test(comment) || /\?{4,}/.test(comment)) comment = ""; // 截断/乱码兜底
   const plan = defaultMotion(scene, emotion, act, comment);
-  plan.say = isProactive ? true : Boolean(data.say ?? !!comment);
-  plan.intensity = clampF(data.intensity, plan.intensity);
-  plan.duration_ms = clampI(data.duration_ms, plan.duration_ms);
-  if (VALID.vis.has(data.visibility)) plan.visibility = data.visibility;
-  const m = (data.motion && typeof data.motion === "object") ? data.motion : {};
-  if (VALID.body.has(m.body)) plan.motion.body = m.body;
-  if (VALID.ball.has(m.ball)) plan.motion.ball = m.ball;
-  if (VALID.effect.has(m.effect)) plan.motion.effect = m.effect;
+  plan.say = Boolean(data.say ?? !!comment) && !!comment;
   return plan;
 }
 
-function kimiRequest(apiKey, payload, timeoutMs = 45000) {
+function request(opts, payload, timeoutMs) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(payload);
     const req = https.request({
-      host: KIMI_HOST, path: KIMI_PATH, method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "Content-Length": Buffer.byteLength(body),
-      },
+      host: opts.host, path: opts.path, method: "POST",
+      headers: Object.assign({ "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }, opts.headers),
     }, (res) => {
       let buf = "";
       res.on("data", (c) => (buf += c));
       res.on("end", () => {
-        if (res.statusCode >= 400) return reject(new Error(`Kimi ${res.statusCode}: ${buf.slice(0, 200)}`));
-        try {
-          const j = JSON.parse(buf);
-          const text = (j.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
-          resolve(text);
-        } catch (e) { reject(e); }
+        if (res.statusCode >= 400) return reject(new Error(`${opts.host} ${res.statusCode}: ${buf.slice(0, 160)}`));
+        try { resolve(JSON.parse(buf)); } catch (e) { reject(e); }
       });
     });
     req.on("error", reject);
-    req.setTimeout(timeoutMs, () => { req.destroy(new Error("Kimi 请求超时")); });
-    req.write(body);
-    req.end();
+    req.setTimeout(timeoutMs || 30000, () => req.destroy(new Error("请求超时")));
+    req.write(body); req.end();
   });
 }
 
-// 看屏解说:image 为 dataURL,返回 motion plan
-async function commentate(apiKey, image, homeTeam, history) {
+function parseImage(image) {
   const m = /^data:(image\/\w+);base64,(.*)$/s.exec(image || "");
-  const media = m ? m[1] : "image/jpeg";
-  const b64 = m ? m[2] : image;
+  return { media: m ? m[1] : "image/jpeg", b64: m ? m[2] : image };
+}
+function buildUser(homeTeam, history) {
   const hist = history && history.length ? history.join(" / ") : "(刚开始)";
-  const teamLine = homeTeam ? `用户给${homeTeam}应援,球赛时你也向着${homeTeam}。` : "";
-  const txt = `${teamLine}刚说过:${hist}。看现在这帧画面,要不要开口?给 JSON。`;
-  const payload = {
-    model: KIMI_MODEL, max_tokens: 200, temperature: 0.85, system: SYSTEM,
-    messages: [{ role: "user", content: [
-      { type: "image", source: { type: "base64", media_type: media, data: b64 } },
-      { type: "text", text: txt },
-    ] }],
-  };
-  const raw = await kimiRequest(apiKey, payload);
-  return normalizePlan(extractJson(raw), false) || defaultMotion("browse", "calm", "idle", "");
+  // 注意:不在这里注入主队/球迷信息,否则会诱导模型在非球赛画面也扯足球。
+  // 主队应援只在"画面真是球赛"时才提(由 SYSTEM 控制),模型会从画面里的球衣自行判断。
+  return `刚才我说过:${hist}。看现在这帧画面里用户在干嘛,要不要开口、说啥?评论只针对画面里真实有的东西,给一句新的、别和刚才重复。给 JSON。`;
 }
 
-async function proactive(apiKey, trigger, homeTeam, history) {
-  const base = PROACTIVE_PROMPTS[trigger] || PROACTIVE_PROMPTS.curiosity;
-  const hist = history && history.length ? ` 别和这些重复:${history.join(" / ")}` : "";
-  const payload = {
-    model: KIMI_MODEL, max_tokens: 180, temperature: 1.0, system: PROACTIVE_SYSTEM,
-    messages: [{ role: "user", content: `${base}${hist}` }],
-  };
-  const raw = await kimiRequest(apiKey, payload);
-  return normalizePlan(extractJson(raw), true) || defaultMotion("idle", "calm", "wave", "嗨,我在呢~");
+async function viaQwen(image, homeTeam, history) {
+  const { media, b64 } = parseImage(image);
+  const j = await request(
+    { host: VLM.host, path: VLM.path, headers: { Authorization: `Bearer ${VLM.token}` } },
+    { model: VLM.model, max_tokens: 110, temperature: 0.9, messages: [
+      { role: "system", content: SYSTEM },
+      { role: "user", content: [
+        { type: "image_url", image_url: { url: `data:${media};base64,${b64}` } },
+        { type: "text", text: buildUser(homeTeam, history) },
+      ] },
+    ] });
+  const msg = (j.choices && j.choices[0] && j.choices[0].message) || {};
+  return normalizePlan(extractJson(msg.content || msg.reasoning_content || ""));
 }
 
-async function testKey(apiKey) {
-  const payload = { model: KIMI_MODEL, max_tokens: 10, messages: [{ role: "user", content: "说:ok" }] };
-  const raw = await kimiRequest(apiKey, payload, 15000);
-  return Boolean(raw);
+async function viaKimi(apiKey, image, homeTeam, history) {
+  const { media, b64 } = parseImage(image);
+  const j = await request(
+    { host: KIMI.host, path: KIMI.path, headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" } },
+    { model: KIMI.model, max_tokens: 110, temperature: 0.9, system: SYSTEM, messages: [
+      { role: "user", content: [
+        { type: "image", source: { type: "base64", media_type: media, data: b64 } },
+        { type: "text", text: buildUser(homeTeam, history) },
+      ] },
+    ] });
+  const text = (j.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
+  return normalizePlan(extractJson(text));
 }
 
-module.exports = { commentate, proactive, testKey };
+async function commentate({ provider, kimiKey, image, homeTeam, history }) {
+  const plan = (provider === "k2.6" || provider === "kimi")
+    ? await viaKimi(kimiKey, image, homeTeam, history)
+    : await viaQwen(image, homeTeam, history);
+  return plan || defaultMotion("browse", "calm", "idle", "");
+}
+
+async function testProvider({ provider, kimiKey }) {
+  if (provider === "k2.6" || provider === "kimi") {
+    const j = await request({ host: KIMI.host, path: KIMI.path, headers: { "x-api-key": kimiKey, "anthropic-version": "2023-06-01" } },
+      { model: KIMI.model, max_tokens: 8, messages: [{ role: "user", content: "说:ok" }] }, 15000);
+    return Boolean(j);
+  }
+  const j = await request({ host: VLM.host, path: VLM.path, headers: { Authorization: `Bearer ${VLM.token}` } },
+    { model: VLM.model, max_tokens: 5, temperature: 0, messages: [{ role: "user", content: "说ok" }] }, 15000);
+  return Boolean(j);
+}
+
+module.exports = { commentate, testProvider };

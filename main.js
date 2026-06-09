@@ -147,25 +147,19 @@ ipcMain.handle("set-config", (e, patch) => {
   saveConfig(userConfig);
   return { ok: true, hasKey: !!userConfig.kimiKey };
 });
-ipcMain.handle("test-key", async (e, key) => {
-  try { await kimi.testKey(key || userConfig.kimiKey); return { ok: true }; }
+ipcMain.handle("test-key", async (e, arg) => {
+  const provider = (arg && arg.provider) || "qwen3";
+  const key = (arg && arg.key) || (typeof arg === "string" ? arg : "") || userConfig.kimiKey;
+  try { await kimi.testProvider({ provider, kimiKey: key }); return { ok: true }; }
   catch (err) { return { ok: false, error: String(err.message || err) }; }
 });
 
 // ---- Kimi 代理:看屏解说 / 主动说话(在主进程发请求,避开浏览器 CORS) ----
-ipcMain.handle("commentate", async (e, { image, homeTeam, history }) => {
-  if (!userConfig.kimiKey) return { error: "no_key" };
+ipcMain.handle("commentate", async (e, { image, homeTeam, history, provider }) => {
+  const prov = provider || "qwen3";
+  if (prov === "k2.6" && !userConfig.kimiKey) return { error: "no_key" };
   try {
-    const plan = await kimi.commentate(userConfig.kimiKey, image, homeTeam, history);
-    let audio = null;
-    if (plan && plan.say && plan.comment) { try { audio = await synthSpeech(plan.comment); } catch (_) {} }
-    return { plan, audio };
-  } catch (err) { return { error: String(err.message || err) }; }
-});
-ipcMain.handle("proactive", async (e, { trigger, homeTeam, history }) => {
-  if (!userConfig.kimiKey) return { error: "no_key" };
-  try {
-    const plan = await kimi.proactive(userConfig.kimiKey, trigger, homeTeam, history);
+    const plan = await kimi.commentate({ provider: prov, kimiKey: userConfig.kimiKey, image, homeTeam, history });
     let audio = null;
     if (plan && plan.comment) { try { audio = await synthSpeech(plan.comment); } catch (_) {} }
     return { plan, audio };
