@@ -376,7 +376,8 @@ function showBubble(text) {
 }
 
 // 各场景的看屏节奏(毫秒):工作时拉很长、少打扰;球赛最勤
-const SCENE_INTERVAL = { sports: 5000, video: 9000, game: 9000, music: 18000, browse: 14000, chat: 16000, work: 25000, reading: 25000, idle: 18000 };
+// 看屏节奏(ms):看得勤,但"说不说"由 say 决定(没新内容就 say=false 不出声),所以勤看不等于话多。
+const SCENE_INTERVAL = { sports: 2500, video: 5000, game: 5000, music: 10000, browse: 6000, chat: 7000, work: 9000, reading: 9000, idle: 10000 };
 let curScene = "browse";
 let stealthTimer = null;
 
