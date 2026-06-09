@@ -378,6 +378,29 @@ function showBubble(text) {
 // 各场景的看屏节奏(毫秒):工作时拉很长、少打扰;球赛最勤
 // 看屏节奏(ms):看得勤,但"说不说"由 say 决定(没新内容就 say=false 不出声),所以勤看不等于话多。
 const SCENE_INTERVAL = { sports: 2500, video: 5000, game: 5000, music: 10000, browse: 6000, chat: 7000, work: 9000, reading: 9000, idle: 10000 };
+
+// 开口频率下限(ms):看得勤≠话多。球赛勤但不刷屏;work 只能偶尔逗一句,别打扰。
+const SPEAK_COOLDOWN = { sports: 6000, video: 12000, game: 12000, music: 24000, browse: 16000, chat: 16000, work: 75000, reading: 75000, idle: 24000 };
+
+// 去重:VLM 对变化不大的画面常吐同一句,光靠 prompt 管不住,客户端硬挡。
+function _normC(s) { return String(s || "").replace(/[\s，。！!,.~、…?？:：;；"'"']+/g, "").trim(); }
+function _bigrams(s) { const g = new Set(); for (let i = 0; i < s.length - 1; i++) g.add(s.slice(i, i + 2)); return g; }
+function isDuplicateComment(comment) {
+  const c = _normC(comment);
+  if (!c) return true;
+  for (const h of speakHistory) {
+    const x = _normC(h);
+    if (!x) continue;
+    if (x === c) return true;
+    const short = x.length <= c.length ? x : c, long = x.length <= c.length ? c : x;
+    if (short.length >= 6 && long.includes(short)) return true; // 一句基本包含另一句
+    const ga = _bigrams(x), gb = _bigrams(c); let inter = 0;
+    ga.forEach(g => { if (gb.has(g)) inter++; });
+    const uni = ga.size + gb.size - inter;
+    if (uni > 0 && inter / uni > 0.68) return true; // 二元组相似度过高
+  }
+  return false;
+}
 let curScene = "browse";
 let stealthTimer = null;
 
@@ -441,8 +464,16 @@ async function tick() {
     statusEl.textContent = `${scene} ${dt}s`;
     petLog(`scene=${scene} say=${plan.say} ${dt}s seen="${(plan.seen || "").slice(0, 40)}" comment="${(plan.comment || "").slice(0, 40)}"`);
 
-    // 不该说就只做表情/动作,不出声(工作/阅读连动作都收着)
+    // 不该说就只做表情/动作,不出声
     if (!plan.say || !plan.comment) { executeMotion(plan); return; }
+    // 客户端硬控:① 开口频率下限(work 偶尔、球赛勤但不刷屏);② 去重(别重复上次的话)
+    const cd = SPEAK_COOLDOWN[scene] ?? 14000;
+    const tooSoon = (Date.now() - AUTONOMY.lastSpeak) < cd;
+    if (tooSoon || isDuplicateComment(plan.comment)) {
+      petLog(`suppress(${tooSoon ? "cooldown" : "dup"}) "${(plan.comment || "").slice(0, 30)}"`);
+      executeMotion(plan);
+      return;
+    }
     AUTONOMY.lastSpeak = Date.now();
     pushHistory(plan.comment, plan.emotion);
     showBubble(plan.comment);
