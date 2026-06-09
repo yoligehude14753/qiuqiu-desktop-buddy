@@ -1,10 +1,46 @@
 const { app, BrowserWindow, ipcMain, desktopCapturer, screen, globalShortcut } = require("electron");
 const fs = require("fs");
 const path = require("path");
+const https = require("https");
+const http = require("http");
 const kimi = require("./kimi");
 
 let win = null;
 let clickThrough = false;
+
+// 语音:CosyVoice2(longxiaochun_v2),与 6/7 北京腔版同款音色。
+// 桌面版连不了 heyi 的 localhost,走 Cloudflare 公网网关(实测 ~2s),音频随解说一起返回(声画同到)。
+const TTS = {
+  url: "https://tts2.yoliyoli.uk",
+  model: "cosyvoice-v2",
+  voice: "longxiaochun_v2",
+  token: "__GATEWAY_TOKEN_REMOVED__",
+};
+function synthSpeech(text) {
+  return new Promise((resolve, reject) => {
+    if (!text) return resolve(null);
+    const target = new URL(TTS.url.replace(/\/+$/, "") + "/v1/audio/speech");
+    const lib = target.protocol === "https:" ? https : http;
+    const body = JSON.stringify({ model: TTS.model, input: text, voice: TTS.voice, response_format: "mp3" });
+    const req = lib.request({
+      hostname: target.hostname, port: target.port, path: target.pathname, method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${TTS.token}`, "Content-Length": Buffer.byteLength(body) },
+      timeout: 20000,
+    }, (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => {
+        const buf = Buffer.concat(chunks);
+        if (res.statusCode >= 400) return reject(new Error(`TTS ${res.statusCode}`));
+        const type = res.headers["content-type"] || "audio/mpeg";
+        resolve(`data:${type};base64,${buf.toString("base64")}`);
+      });
+    });
+    req.on("timeout", () => req.destroy(new Error("TTS 超时")));
+    req.on("error", reject);
+    req.write(body); req.end();
+  });
+}
 
 // ---- 用户配置(存到 userData/config.json),含 Kimi Key ----
 function configPath() { return path.join(app.getPath("userData"), "config.json"); }
@@ -119,13 +155,21 @@ ipcMain.handle("test-key", async (e, key) => {
 // ---- Kimi 代理:看屏解说 / 主动说话(在主进程发请求,避开浏览器 CORS) ----
 ipcMain.handle("commentate", async (e, { image, homeTeam, history }) => {
   if (!userConfig.kimiKey) return { error: "no_key" };
-  try { return { plan: await kimi.commentate(userConfig.kimiKey, image, homeTeam, history) }; }
-  catch (err) { return { error: String(err.message || err) }; }
+  try {
+    const plan = await kimi.commentate(userConfig.kimiKey, image, homeTeam, history);
+    let audio = null;
+    if (plan && plan.say && plan.comment) { try { audio = await synthSpeech(plan.comment); } catch (_) {} }
+    return { plan, audio };
+  } catch (err) { return { error: String(err.message || err) }; }
 });
 ipcMain.handle("proactive", async (e, { trigger, homeTeam, history }) => {
   if (!userConfig.kimiKey) return { error: "no_key" };
-  try { return { plan: await kimi.proactive(userConfig.kimiKey, trigger, homeTeam, history) }; }
-  catch (err) { return { error: String(err.message || err) }; }
+  try {
+    const plan = await kimi.proactive(userConfig.kimiKey, trigger, homeTeam, history);
+    let audio = null;
+    if (plan && plan.comment) { try { audio = await synthSpeech(plan.comment); } catch (_) {} }
+    return { plan, audio };
+  } catch (err) { return { error: String(err.message || err) }; }
 });
 
 app.whenReady().then(() => {

@@ -303,6 +303,25 @@ function speak(text) {
   } catch (_) { statusEl.textContent = "语音失败"; return false; }
 }
 
+// 播放服务端随解说一起返回的 CosyVoice 音频(北京腔同款);失败/无音频回退系统语音。
+function say(text, audio) {
+  if (!cfg.speak || cfg.mute) { statusEl.textContent = "语音关闭"; return false; }
+  if (audio && player) {
+    try {
+      if (window.speechSynthesis) speechSynthesis.cancel();
+      player.pause();
+      player.src = audio;
+      player.volume = cfg.vol / 100;
+      player.onplay = startTalk;
+      player.onended = stopTalk;
+      player.onerror = () => { stopTalk(); speak(text); };
+      player.play().catch(() => speak(text));
+      return true;
+    } catch (_) { return speak(text); }
+  }
+  return speak(text);
+}
+
 // 最近解说历史(给 Kimi 去重)
 const speakHistory = [];
 function pushHistory(t, emotion) {
@@ -383,7 +402,7 @@ async function tick() {
     pushHistory(d.comment, d.emotion);
     showBubble(d.comment);
     executeMotion(d.motion || { emotion: d.emotion || "calm", act: d.act || "idle" });
-    speak(d.comment);
+    say(d.comment, resp.audio);
   } catch (e) { statusEl.textContent = "✕"; console.error(e); }
   busy = false;
 }
@@ -560,7 +579,7 @@ async function proactive(trigger) {
       pushHistory(plan.comment, plan.emotion);
       showBubble(plan.comment);
       executeMotion(plan);
-      speak(plan.comment);
+      say(plan.comment, resp.audio);
     }
   } catch (e) { console.error(e); }
 }
