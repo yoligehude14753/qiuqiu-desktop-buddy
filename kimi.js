@@ -32,6 +32,8 @@ const SYSTEM = [
   "work/reading 高专注时收着点(别打断思路),但可以隔几帧轻声点一句\"你在弄啥\",不必一直闭嘴。",
   "只有当画面和刚才几乎一模一样、或确实没新东西可说时才 say=false。",
   "绝不重复上一句说过的话,绝不说放之四海皆准的空话套话(如\"在忙呀\"\"加油哦\")。",
+  "【铁律·不许瞎掰】评论只能说画面里真实可见的东西;比分/队名/球员名/文字/剧情等,看清楚再说,",
+  "看不清或不确定就别提具体数字和名字(可以泛指\"主队/客队/这位球员\"),宁可 say=false 也绝不编造画面里没有的信息。",
   "【情绪 emotion】hype / angry / surprise / calm / focus。",
   "【动作 act】cheer / facepalm / point / clap / think / wave / kick / idle。",
   "说话像好朋友随口聊,热情活泼接地气,一句不超过26字,不书面不列点不重复;绝不出现人名或称呼前缀。",
@@ -170,10 +172,13 @@ function qwenRequest(payload, timeoutMs = 30000) {
   });
 }
 
-function buildUserText(homeTeam, history) {
+function buildUserText(homeTeam, history, changed) {
   const hist = history && history.length ? history.join(" / ") : "(刚开始)";
   const teamLine = homeTeam ? `用户给${homeTeam}应援,球赛时你也向着${homeTeam}。` : "";
-  return `${teamLine}你刚说过:${hist}。先看清这帧截图里到底是什么(填 seen),再据此判断 scene、要不要开口。给 JSON。`;
+  const changeLine = changed
+    ? "画面刚发生了明显变化(切了窗口/内容变了),看清新画面里有什么,有可说的就 say=true 说一句贴合新画面的。"
+    : "画面和刚才差不多,只有出现新的、值得说的内容才 say=true,否则 say=false。";
+  return `${teamLine}你刚说过:${hist}。${changeLine}先看清这帧截图里到底是什么(填 seen),再判断 scene、要不要开口。给 JSON。`;
 }
 function parseImage(image) {
   const m = /^data:(image\/\w+);base64,(.*)$/s.exec(image || "");
@@ -181,7 +186,7 @@ function parseImage(image) {
 }
 
 // 看屏解说(Qwen3-VL,默认):image 为 dataURL,返回 motion plan
-async function commentateQwen(image, homeTeam, history) {
+async function commentateQwen(image, homeTeam, history, changed) {
   const { media, b64 } = parseImage(image);
   const payload = {
     model: VLM.model, max_tokens: 300, temperature: 0.4,
@@ -189,7 +194,7 @@ async function commentateQwen(image, homeTeam, history) {
       { role: "system", content: SYSTEM },
       { role: "user", content: [
         { type: "image_url", image_url: { url: `data:${media};base64,${b64}` } },
-        { type: "text", text: buildUserText(homeTeam, history) },
+        { type: "text", text: buildUserText(homeTeam, history, changed) },
       ] },
     ],
   };
@@ -198,13 +203,13 @@ async function commentateQwen(image, homeTeam, history) {
 }
 
 // 看屏解说(Kimi K2.6):image 为 dataURL,返回 motion plan
-async function commentateKimi(apiKey, image, homeTeam, history) {
+async function commentateKimi(apiKey, image, homeTeam, history, changed) {
   const { media, b64 } = parseImage(image);
   const payload = {
     model: KIMI_MODEL, max_tokens: 300, temperature: 0.5, system: SYSTEM,
     messages: [{ role: "user", content: [
       { type: "image", source: { type: "base64", media_type: media, data: b64 } },
-      { type: "text", text: buildUserText(homeTeam, history) },
+      { type: "text", text: buildUserText(homeTeam, history, changed) },
     ] }],
   };
   const raw = await kimiRequest(apiKey, payload);
@@ -213,9 +218,9 @@ async function commentateKimi(apiKey, image, homeTeam, history) {
 
 // 看屏解说调度:provider 选 qwen3(默认) / k2.6
 async function commentate(opts) {
-  const { provider, kimiKey, image, homeTeam, history } = opts || {};
-  if (provider === "k2.6" || provider === "kimi") return commentateKimi(kimiKey, image, homeTeam, history);
-  return commentateQwen(image, homeTeam, history);
+  const { provider, kimiKey, image, homeTeam, history, changed } = opts || {};
+  if (provider === "k2.6" || provider === "kimi") return commentateKimi(kimiKey, image, homeTeam, history, changed);
+  return commentateQwen(image, homeTeam, history, changed);
 }
 
 async function proactive(apiKey, trigger, homeTeam, history) {

@@ -120,9 +120,31 @@ function frameStats(nativeImg) {
   } catch (_) { return { brightness: 0, variance: 0 }; }
 }
 
+// 16x16 灰度指纹:用于"画面变化检测"(打字这种小改动不触发,切屏/滚动/视频变化才触发)。
+function frameSignature(nativeImg) {
+  try {
+    const sz = nativeImg.getSize();
+    const bmp = nativeImg.toBitmap(); // BGRA
+    const W = sz.width, H = sz.height, G = 16;
+    if (!W || !H) return null;
+    const sum = new Array(G * G).fill(0), cnt = new Array(G * G).fill(0);
+    const stepY = Math.max(1, Math.floor(H / 96)), stepX = Math.max(1, Math.floor(W / 96));
+    for (let y = 0; y < H; y += stepY) {
+      const gy = Math.min(G - 1, Math.floor((y * G) / H));
+      for (let x = 0; x < W; x += stepX) {
+        const o = (y * W + x) * 4;
+        const lum = (bmp[o] + bmp[o + 1] + bmp[o + 2]) / 3;
+        const idx = gy * G + Math.min(G - 1, Math.floor((x * G) / W));
+        sum[idx] += lum; cnt[idx]++;
+      }
+    }
+    return sum.map((s, i) => (cnt[i] ? Math.round(s / cnt[i]) : 0));
+  } catch (_) { return null; }
+}
+
 // 抓屏:遍历所有显示器,挑"信息量最大"的一帧(方差高=有窗口/内容),解决多屏只抓主屏的问题。
-// 关键:压到 ~900px + JPEG,大幅降低上传与 VLM 视觉编码耗时(实测 1280PNG 6-13s → 900JPEG ~2s)。
-const CAP_MAX_EDGE = 900;
+// ~1100px + JPEG q82:在"读得清(不瞎掰)"与"够快"之间取平衡。
+const CAP_MAX_EDGE = 1100;
 async function captureBestScreen() {
   const displays = screen.getAllDisplays();
   const maxEdge = displays.reduce((m, d) => Math.max(m, d.size.width, d.size.height), CAP_MAX_EDGE);
@@ -148,8 +170,9 @@ async function captureBestScreen() {
 
   // 空帧判定:方差极低(全黑或纯色壁纸,通常意味着没拿到窗口内容/未授权)
   const empty = best.st.variance < 40;
-  const jpeg = best.source.thumbnail.toJPEG(70);
-  return { image: "data:image/jpeg;base64," + jpeg.toString("base64"), empty, stats: best.st };
+  const jpeg = best.source.thumbnail.toJPEG(82);
+  const sig = frameSignature(best.source.thumbnail);
+  return { image: "data:image/jpeg;base64," + jpeg.toString("base64"), empty, sig, stats: best.st };
 }
 
 // 渲染进程请求抓全屏 → 返回 { image, empty, permission }
@@ -280,10 +303,10 @@ ipcMain.handle("synthesize-speech", async (e, args) => {
 });
 
 // ---- Kimi 代理:看屏解说 / 主动说话(在主进程发请求,避开浏览器 CORS) ----
-ipcMain.handle("commentate", async (e, { image, homeTeam, history, provider }) => {
+ipcMain.handle("commentate", async (e, { image, homeTeam, history, provider, changed }) => {
   const prov = provider || "qwen3";
   if (prov === "k2.6" && !userConfig.kimiKey) return { error: "no_key" };
-  try { return { plan: await kimi.commentate({ provider: prov, kimiKey: userConfig.kimiKey, image, homeTeam, history }) }; }
+  try { return { plan: await kimi.commentate({ provider: prov, kimiKey: userConfig.kimiKey, image, homeTeam, history, changed }) }; }
   catch (err) { return { error: String(err.message || err) }; }
 });
 ipcMain.handle("proactive", async (e, { trigger, homeTeam, history }) => {

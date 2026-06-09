@@ -7,6 +7,9 @@
 - Self-paced capture loop: the next frame is scheduled only after the previous one finishes, so short intervals no longer pile up requests.
 - Capture downscaled to ~900px JPEG, cutting vision latency from 6-13s (1280px PNG) to ~2s.
 - Added a local buddy.log (in the app data dir) recording scene/say/latency for diagnosis.
+- Commentary is now change-driven: a 16x16 frame signature detects real screen changes. Static scenes (work/reading/browse) stay silent unless the screen visibly changes (switch app, scroll, obvious edit); dynamic scenes (sports/video/game) get continuous feedback. Removed fixed time-based cooldowns.
+- Client-side dedup suppresses near-identical lines so it can no longer spam the same sentence.
+- Capture bumped to ~1100px JPEG q82 for clearer reading, plus a strict no-fabrication rule (don't invent scores/names it can't actually see).
 
 ## 0.9.2
 

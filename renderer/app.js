@@ -379,8 +379,17 @@ function showBubble(text) {
 // 看屏节奏(ms):看得勤,但"说不说"由 say 决定(没新内容就 say=false 不出声),所以勤看不等于话多。
 const SCENE_INTERVAL = { sports: 2500, video: 5000, game: 5000, music: 10000, browse: 6000, chat: 7000, work: 9000, reading: 9000, idle: 10000 };
 
-// 开口频率下限(ms):看得勤≠话多。球赛勤但不刷屏;work 只能偶尔逗一句,别打扰。
-const SPEAK_COOLDOWN = { sports: 6000, video: 12000, game: 12000, music: 24000, browse: 16000, chat: 16000, work: 75000, reading: 75000, idle: 24000 };
+// 变化驱动:动态场景(看视频/球赛/游戏)持续给反馈;静态场景(工作/阅读/浏览/聊天)只在画面"明显变化"时才开口。
+const DYNAMIC_SCENES = new Set(["sports", "video", "game"]);
+// 画面变化阈值(16x16 灰度均差 0-255):打字/光标这类小改动 < 阈值不触发;切屏/滚动/视频切换 ≥ 阈值才算明显变化。
+const CHANGE_THRESHOLD = 6;
+const MIN_SPEAK_GAP = 3000; // 最小开口间隔,防止话赶话/盖过 TTS
+let lastSig = null;
+function sigDiff(a, b) {
+  if (!a || !b || a.length !== b.length) return 999;
+  let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]);
+  return s / a.length;
+}
 
 // 去重:VLM 对变化不大的画面常吐同一句,光靠 prompt 管不住,客户端硬挡。
 function _normC(s) { return String(s || "").replace(/[\s，。！!,.~、…?？:：;；"'"']+/g, "").trim(); }
@@ -448,7 +457,21 @@ async function tick() {
       if (cap && (cap.permission === "denied" || cap.permission === "restricted" || cap.empty)) warnScreenPermission();
       scene = "idle"; petLog(`capture empty perm=${cap && cap.permission}`); return;
     }
-    const resp = await window.pet.commentate({ image: cap.image, homeTeam: TEAMS[curTeam].name, history: speakHistory, provider: cfg.visionProvider });
+    // 画面变化检测:静态场景(工作/阅读等)画面没明显变化就不打扰,连 VLM 都不调,保持安静。
+    const diff = sigDiff(cap.sig, lastSig);
+    const firstFrame = lastSig === null;
+    lastSig = cap.sig || lastSig;
+    const prevScene = AUTONOMY.lastScene;
+    const dynamic = DYNAMIC_SCENES.has(prevScene);
+    if (!firstFrame && !dynamic && diff < CHANGE_THRESHOLD) {
+      scene = prevScene || "idle";
+      statusEl.textContent = `${scene}·静`;
+      petLog(`skip nochange diff=${diff.toFixed(1)} scene=${scene}`);
+      return; // 画面没变,安静,下次再看
+    }
+
+    const changed = firstFrame || diff >= CHANGE_THRESHOLD;
+    const resp = await window.pet.commentate({ image: cap.image, homeTeam: TEAMS[curTeam].name, history: speakHistory, provider: cfg.visionProvider, changed });
     if (resp.error) {
       statusEl.textContent = resp.error === "no_key" ? "未配置Key" : "✕";
       petLog(`commentate error: ${resp.error}`);
@@ -458,19 +481,18 @@ async function tick() {
     const plan = resp.plan || {};
     scene = plan.scene || "browse";
     const dt = ((Date.now() - t0) / 1000).toFixed(1);
-    onSceneChanged(AUTONOMY.lastScene, scene);
+    onSceneChanged(prevScene, scene);
     AUTONOMY.lastScene = scene;
     applyStealth(scene);
     statusEl.textContent = `${scene} ${dt}s`;
-    petLog(`scene=${scene} say=${plan.say} ${dt}s seen="${(plan.seen || "").slice(0, 40)}" comment="${(plan.comment || "").slice(0, 40)}"`);
+    petLog(`scene=${scene} say=${plan.say} diff=${diff.toFixed(1)} ${dt}s seen="${(plan.seen || "").slice(0, 44)}" comment="${(plan.comment || "").slice(0, 44)}"`);
 
     // 不该说就只做表情/动作,不出声
     if (!plan.say || !plan.comment) { executeMotion(plan); return; }
-    // 客户端硬控:① 开口频率下限(work 偶尔、球赛勤但不刷屏);② 去重(别重复上次的话)
-    const cd = SPEAK_COOLDOWN[scene] ?? 14000;
-    const tooSoon = (Date.now() - AUTONOMY.lastSpeak) < cd;
+    // 去重 + 最小间隔(由画面变化驱动开口,不再用固定长冷却)
+    const tooSoon = (Date.now() - AUTONOMY.lastSpeak) < MIN_SPEAK_GAP;
     if (tooSoon || isDuplicateComment(plan.comment)) {
-      petLog(`suppress(${tooSoon ? "cooldown" : "dup"}) "${(plan.comment || "").slice(0, 30)}"`);
+      petLog(`suppress(${tooSoon ? "gap" : "dup"}) "${(plan.comment || "").slice(0, 30)}"`);
       executeMotion(plan);
       return;
     }
