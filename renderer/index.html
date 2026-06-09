@@ -56,8 +56,6 @@
   .row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #21262d}
   .row label{color:#adbac7}
   .row input[type=range]{width:110px}
-  .row input[type=text]{-webkit-app-region:no-drag;width:165px;border:1px solid #30363d;background:#0d1117;color:#e6edf3;border-radius:8px;padding:5px;font-size:12px}
-  .row select{-webkit-app-region:no-drag;width:165px;border:1px solid #30363d;background:#0d1117;color:#e6edf3;border-radius:8px;padding:5px;font-size:12px}
   .panel .list{overflow-y:auto;flex:1}
   .panel .item{padding:6px 0;border-bottom:1px solid #21262d;line-height:1.4}
   .panel .item .t{font-size:10px;color:#7d8590}
@@ -103,21 +101,12 @@
   <div class="panel" id="settingsPanel">
     <h3>设置 <span class="x" data-close="settingsPanel">✕</span></h3>
     <div class="keybox">
-      <label>看屏模型</label>
-      <select id="visionProvider">
-        <option value="qwen3">Qwen3-VL（默认·内置·快·免Key）</option>
-        <option value="k2.6">Kimi K2.6（云端·需自带Key）</option>
-      </select>
-      <label style="margin-top:6px">Kimi API Key（仅 K2.6 需要）</label>
-      <input id="kimiKey" type="password" placeholder="选 K2.6 时粘贴你的 Kimi Key（sk-...）"/>
+      <label>Kimi API Key</label>
+      <input id="kimiKey" type="password" placeholder="填入你的 Kimi Key，本机保存"/>
       <div class="key-actions">
         <button id="saveKey">保存</button>
         <button class="secondary" id="testKey">测试</button>
         <span id="keyStatus">未检测</span>
-      </div>
-      <div style="font-size:11px;color:#7d8590;line-height:1.5">
-        默认 Qwen3-VL 与语音都已内置（heyi 服务），开箱即用、无需任何 Key。<br/>
-        想用 Kimi K2.6 看屏时，去 platform.moonshot.cn 生成 Key 粘到上面。
       </div>
     </div>
     <div class="row"><label>看屏频率</label>
@@ -128,11 +117,6 @@
     <div class="row"><label>静音</label><input type="checkbox" id="mute"/></div>
     <div class="row"><label>启动即自动陪看</label><input type="checkbox" id="auto" checked/></div>
     <div class="row"><label>语音播报</label><input type="checkbox" id="speak" checked/></div>
-    <div class="row"><label>语音引擎</label><select id="ttsProvider"><option value="cosyvoice">CosyVoice（内置）</option><option value="system">系统语音</option></select></div>
-    <div class="row"><label>CosyVoice 音色</label><select id="ttsVoice"><option value="longxiaochun_v2">温柔女声</option><option value="longwan_v2">知性女声</option><option value="longcheng_v2">磁性男声</option><option value="longhua_v2">活泼童声</option></select></div>
-    <div class="row"><label>系统音色</label><select id="voiceSelect"><option value="">自动中文</option></select></div>
-    <div class="row"><label>语速</label><input type="range" id="rate" min="70" max="130" value="100"/></div>
-    <div class="row"><label>音调</label><input type="range" id="pitch" min="70" max="130" value="105"/></div>
     <div class="row"><label>系统语音</label><button class="btn tool" id="voiceTest" style="height:24px;min-width:52px">试音</button></div>
     <div class="row"><label>形象</label>
       <div class="seg" id="runtimeSeg">
