@@ -2,7 +2,11 @@
 let hasKey = false;
 
 // ---- 设置(本地持久化) ----
-const DEFAULTS = { interval: 5000, vol: 90, mute: false, auto: true, speak: true, team: "default", runtime: "sprite" };
+const DEFAULTS = {
+  interval: 5000, vol: 90, mute: false, auto: true, speak: true, team: "default", runtime: "sprite",
+  // 语音服务端点已内置(主进程 heyi CosyVoice),这里只留用户可选的音色/语速。
+  ttsProvider: "cosyvoice", ttsVoice: "longxiaochun_v2", systemVoice: "", rate: 100, pitch: 105,
+};
 let cfg = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem("kanqiu_cfg") || "{}"));
 if (cfg.runtime === "rig") cfg.runtime = "sprite"; // 移除惊悚的骨骼切块版
 function saveCfg() { localStorage.setItem("kanqiu_cfg", JSON.stringify(cfg)); }
@@ -263,11 +267,22 @@ function spawnConfetti(n) {
   for (let i=0;i<n;i++){const c=document.createElement("div");c.className="confetti";c.style.left=Math.random()*100+"%";c.style.background=colors[i%colors.length];c.style.borderRadius=Math.random()>.5?"50%":"0";document.getElementById("stage").appendChild(c);c.animate([{transform:"translateY(0) rotate(0)",opacity:1},{transform:`translateY(${360+Math.random()*120}px) rotate(${Math.random()*720}deg)`,opacity:0}],{duration:1600+Math.random()*800,easing:"ease-in"}).onfinish=()=>c.remove();}
 }
 
-// 说话:系统语音(免费免配置),配合数字人口型/弹跳。
+// 说话:CosyVoice / 系统语音,配合数字人口型/弹跳。
 let zhVoice = null;
 function pickVoice() {
   const vs = window.speechSynthesis ? speechSynthesis.getVoices() : [];
-  zhVoice = vs.find(v => /zh|Chinese|Ting|Mei|Sin|Yu/i.test(v.lang + v.name)) || vs[0] || null;
+  zhVoice = vs.find(v => v.name === cfg.systemVoice) ||
+            vs.find(v => /zh|Chinese|Ting|Mei|Sin|Yu/i.test(v.lang + v.name)) || vs[0] || null;
+  renderVoiceOptions(vs);
+}
+function renderVoiceOptions(vs) {
+  const sel = document.getElementById("voiceSelect");
+  if (!sel || sel.dataset.ready === String(vs.length)) return;
+  const current = cfg.systemVoice || "";
+  sel.innerHTML = `<option value="">自动中文</option>` + vs.map(v =>
+    `<option value="${escapeHtml(v.name)}">${escapeHtml(v.name)} · ${escapeHtml(v.lang)}</option>`).join("");
+  sel.value = current;
+  sel.dataset.ready = String(vs.length);
 }
 if (window.speechSynthesis) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
 
@@ -286,7 +301,11 @@ function stopTalk() {
   if (mouthRAF) cancelAnimationFrame(mouthRAF);
   if (live2d) live2d.talk(false);
 }
-function speak(text) {
+function escapeHtml(s) {
+  return String(s || "").replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[c]));
+}
+
+function speakSystem(text) {
   if (!text) return false;
   if (!cfg.speak || cfg.mute) { statusEl.textContent = "语音关闭"; return false; }
   if (!window.speechSynthesis) { statusEl.textContent = "无系统语音"; return false; }
@@ -295,12 +314,41 @@ function speak(text) {
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     if (zhVoice) u.voice = zhVoice;
-    u.lang = "zh-CN"; u.rate = 1.05; u.pitch = 1.1; u.volume = cfg.vol / 100;
+    u.lang = "zh-CN"; u.rate = cfg.rate / 100; u.pitch = cfg.pitch / 100; u.volume = cfg.vol / 100;
     u.onstart = startTalk; u.onend = stopTalk;
     u.onerror = () => { stopTalk(); statusEl.textContent = "语音失败"; };
     speechSynthesis.speak(u);
     return true;
   } catch (_) { statusEl.textContent = "语音失败"; return false; }
+}
+
+async function speakCosyVoice(text) {
+  if (!text) return false;
+  if (!cfg.speak || cfg.mute) { statusEl.textContent = "语音关闭"; return false; }
+  try {
+    statusEl.textContent = "TTS";
+    const resp = await window.pet.synthesizeSpeech({
+      text, voice: cfg.ttsVoice, speed: cfg.rate / 100,
+    });
+    if (!resp.ok || !resp.dataUrl) throw new Error(resp.error || "TTS 失败");
+    if (window.speechSynthesis) speechSynthesis.cancel();
+    player.pause();
+    player.src = resp.dataUrl;
+    player.volume = cfg.vol / 100;
+    player.onplay = startTalk;
+    player.onended = stopTalk;
+    player.onerror = () => { stopTalk(); statusEl.textContent = "音频播放失败"; };
+    await player.play();
+    return true;
+  } catch (e) {
+    console.warn("CosyVoice 失败,回退系统语音", e);
+    statusEl.textContent = "TTS回退";
+    return speakSystem(text);
+  }
+}
+
+function speak(text) {
+  return cfg.ttsProvider === "system" ? speakSystem(text) : speakCosyVoice(text);
 }
 
 // 最近解说历史(给 Kimi 去重)
@@ -355,8 +403,20 @@ async function tick() {
   try {
     statusEl.textContent = "👀";
     if (!hasKey) { busy = false; openKeyPanel(); return; }
-    const img = await window.pet.captureScreen();
-    if (!img) { busy = false; return; }
+    const cap = await window.pet.captureScreen();
+    if (!cap || !cap.image) {
+      // 拿不到画面:多半是 macOS 没给"屏幕录制"权限 → 引导授权
+      if (cap && (cap.permission === "denied" || cap.permission === "restricted" || cap.empty)) {
+        warnScreenPermission();
+      }
+      busy = false; return;
+    }
+    if (cap.empty) {
+      // 抓到了但几乎没内容(纯黑/纯壁纸),通常是没授权或没窗口 → 提示一次,本轮不打扰
+      warnScreenPermission();
+      busy = false; return;
+    }
+    const img = cap.image;
     const resp = await window.pet.commentate({ image: img, homeTeam: TEAMS[curTeam].name, history: speakHistory });
     if (resp.error) {
       statusEl.textContent = resp.error === "no_key" ? "未配置Key" : "✕";
@@ -388,6 +448,30 @@ async function tick() {
   busy = false;
 }
 
+// 屏幕录制权限引导:抓不到画面时提示并引导去系统设置开权限(节流,避免反复弹)
+let _permWarnAt = 0;
+function warnScreenPermission() {
+  statusEl.textContent = "需屏幕权限";
+  const now = Date.now();
+  if (now - _permWarnAt < 60e3) return;
+  _permWarnAt = now;
+  showBubble("我看不到屏幕内容,去“系统设置→隐私→屏幕录制”勾选我,再重开。");
+  if (window.pet.openScreenSettings) window.pet.openScreenSettings();
+}
+
+// 启动时检查一次权限:未授权直接引导,别白跑一圈拿到空帧
+async function checkScreenPermission() {
+  try {
+    if (!window.pet.screenPermission) return true;
+    const r = await window.pet.screenPermission();
+    if (r && (r.status === "denied" || r.status === "restricted")) {
+      warnScreenPermission();
+      return false;
+    }
+  } catch (_) {}
+  return true;
+}
+
 let autonomyTimer = null, idleTimer = null;
 async function startWatching() {
   if (!hasKey) {
@@ -416,6 +500,7 @@ async function autoStart() {
   // 读取 Key 状态:没配则弹配置面板,不自动开始。
   try { const c = await window.pet.getConfig(); hasKey = !!c.hasKey; } catch (_) { hasKey = false; }
   if (!hasKey) { openKeyPanel(); return; }
+  checkScreenPermission();
   if (cfg.auto) setTimeout(() => startWatching(), 2500);
 }
 
@@ -491,6 +576,10 @@ function syncSettingsUI() {
   document.getElementById("speak").checked = cfg.speak;
   document.getElementById("team").value = curTeam;
   document.querySelectorAll("#runtimeSeg button").forEach(b => b.classList.toggle("on", b.dataset.v === cfg.runtime));
+  const tp = document.getElementById("ttsProvider"); if (tp) tp.value = cfg.ttsProvider;
+  const tv = document.getElementById("ttsVoice"); if (tv) tv.value = cfg.ttsVoice;
+  const rt = document.getElementById("rate"); if (rt) rt.value = cfg.rate;
+  const pt = document.getElementById("pitch"); if (pt) pt.value = cfg.pitch;
 }
 document.querySelectorAll("#runtimeSeg button").forEach(b => b.onclick = async () => {
   await setRuntime(b.dataset.v); syncSettingsUI();
@@ -504,6 +593,15 @@ document.getElementById("vol").oninput = (e) => { cfg.vol = +e.target.value; pla
 document.getElementById("mute").onchange = (e) => { cfg.mute = e.target.checked; saveCfg(); };
 document.getElementById("auto").onchange = (e) => { cfg.auto = e.target.checked; saveCfg(); };
 document.getElementById("speak").onchange = (e) => { cfg.speak = e.target.checked; saveCfg(); };
+document.getElementById("ttsProvider")?.addEventListener("change", (e) => { cfg.ttsProvider = e.target.value; saveCfg(); });
+document.getElementById("ttsVoice")?.addEventListener("change", (e) => {
+  cfg.ttsVoice = e.target.value; saveCfg();
+  cfg.speak = true; cfg.mute = false; saveCfg(); syncSettingsUI();
+  speak("换个音色,你听听这个怎么样?");
+});
+document.getElementById("rate")?.addEventListener("input", (e) => { cfg.rate = +e.target.value; saveCfg(); });
+document.getElementById("pitch")?.addEventListener("input", (e) => { cfg.pitch = +e.target.value; saveCfg(); });
+document.getElementById("voiceSelect")?.addEventListener("change", (e) => { cfg.systemVoice = e.target.value; saveCfg(); pickVoice(); });
 document.getElementById("voiceTest").onclick = () => {
   cfg.speak = true;
   cfg.mute = false;

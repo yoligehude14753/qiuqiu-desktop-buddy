@@ -2,8 +2,11 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("pet", {
   captureScreen: () => ipcRenderer.invoke("capture-screen"),
+  screenPermission: () => ipcRenderer.invoke("screen-permission"),
+  openScreenSettings: () => ipcRenderer.invoke("open-screen-settings"),
   commentate: (args) => ipcRenderer.invoke("commentate", args),
   proactive: (args) => ipcRenderer.invoke("proactive", args),
+  synthesizeSpeech: (args) => ipcRenderer.invoke("synthesize-speech", args),
   getConfig: () => ipcRenderer.invoke("get-config"),
   setConfig: (patch) => ipcRenderer.invoke("set-config", patch),
   testKey: (key) => ipcRenderer.invoke("test-key", key),
