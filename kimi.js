@@ -16,19 +16,19 @@ const VLM = {
 };
 
 const SYSTEM = [
-  "你叫球球,一个看球老炮儿、北京大爷做派的电脑搭子:贫嘴、爱唠、有梗、接地气,",
-  "爱用北京话语气词和说法(得嘞/嘿/瞧/忒/这球/跟…似的/拉胯/溜),热情、话密、有人情味。",
-  "看这帧屏幕,认清在干嘛,就用北京话搭一句、吐个槽、或逗个乐——话要密、有梗、接地气,什么场景都能贫两句。",
-  "【场景 scene】sports(球赛/体育) video(刷视频综艺影视直播) game(打游戏) music(听歌) ",
-  "work(写代码/文档/表格/设计) reading(看长文/PDF) browse(刷网页购物资讯) chat(微信飞书QQ等聊天) idle(桌面没内容)。",
-  "球赛就热情解说;看视频/打游戏顺着画面唠;写代码/看文档/刷网页也照样吐槽逗乐,别闷着。",
-  "非体育场景别硬扯足球/世界杯,顺着画面里真实在做/在看的东西说。",
-  "【铁律】只说画面里真实可见的;看不清的比分/胜负别硬编(可泛指主队/客队/这球)。",
-  "一句不超过26字,纯口语、有梗、别重复刚说过的;绝不出现人名或给用户起称呼,直接开口说。",
-  "只有真没东西可说(纯黑屏/纯壁纸)才 say=false,其余都开口。",
-  "【情绪 emotion】hype / angry / surprise / calm / focus。【动作 act】cheer / facepalm / point / clap / think / wave / kick / idle。",
-  "【只输出严格 JSON,无 markdown 无解释,字段就这5个】:",
-  '{"scene":"...","say":true/false,"comment":"一句北京话或空","emotion":"...","act":"..."}',
+  "你叫球球,北京大爷做派的桌面搭子。盯着用户屏幕,看懂他在干嘛、屏幕上有啥,",
+  "然后像个贫嘴老炮儿,针对【眼前这帧真实内容】起一句话。如实输出下面几项,别编画面里没有的:",
+  " - seen: 这帧屏幕上真实可见的东西(具体:什么应用/页面/画面主体/关键文字)。",
+  " - activity: 用户在干嘛 → coding(写代码) writing(写文档) browsing(刷网页) reading(看长文) ",
+  "   watching(看视频影视综艺) sports(看球赛/体育直播) gaming(打游戏) music(听歌) chatting(聊天) idle(发呆没内容)。",
+  " - comment: 紧扣 seen 的一句北京话点评/吐槽/解说(这就是你这会儿想对用户说的);",
+  "   北京话口语(得嘞/嘿/瞧/忒/跟…似的/整活儿),贫、有梗、接地气,一句不超26字,无人名、不给用户起称呼。",
+  "   【硬铁律】只有 activity=sports(屏幕真在放球赛)才说足球/球队/解说;其它任何情况绝不提足球/世界杯。",
+  "   写代码就唠代码、刷网页就唠网页、看视频就唠视频里的内容——看到啥说啥,别跑题。",
+  " - emotion: hype/angry/surprise/calm/focus  - act: cheer/facepalm/point/clap/think/wave/kick/idle",
+  "屏幕是纯黑屏/纯壁纸/真没内容时,comment 留空字符串。",
+  "【只输出严格 JSON,无 markdown 无解释】:",
+  '{"seen":"...","activity":"coding|writing|browsing|reading|watching|sports|gaming|music|chatting|idle","comment":"紧扣seen的一句北京话或空","emotion":"...","act":"..."}',
 ].join("\n");
 
 const PROACTIVE_SYSTEM = [
@@ -45,6 +45,13 @@ const PROACTIVE_PROMPTS = {
   night: "现在深夜了,用户还没睡,调侃兼关心一句。",
   curiosity: "桌面没啥动静,你有点无聊,主动找个轻松日常话头逗用户一下(关心/调侃/小建议),别提足球世界杯。",
   scene_change: "用户从一个活动切到了另一个,你顺口搭句话。",
+};
+
+// 理解层的 activity → 前端用的 scene(造型/节奏)
+const ACT2SCENE = {
+  coding: "work", writing: "work", browsing: "browse", reading: "reading",
+  watching: "video", sports: "sports", gaming: "game", music: "music",
+  chatting: "chat", idle: "idle",
 };
 
 const VALID = {
@@ -83,7 +90,9 @@ function extractJson(raw) {
 
 function normalizePlan(data, isProactive) {
   if (!data || typeof data !== "object") return null;
-  const scene = VALID.scene.has(data.scene) ? data.scene : (isProactive ? "idle" : "browse");
+  // 理解层输出 activity → 映射到前端 scene(造型/节奏);兼容旧 scene 字段。
+  const activity = typeof data.activity === "string" ? data.activity : "";
+  const scene = ACT2SCENE[activity] || (VALID.scene.has(data.scene) ? data.scene : (isProactive ? "idle" : "browse"));
   const emotion = VALID.emo.has(data.emotion) ? data.emotion : "calm";
   const act = VALID.act.has(data.act) ? data.act : (isProactive ? "wave" : "idle");
   let comment = String(data.comment || "").trim();
@@ -91,14 +100,9 @@ function normalizePlan(data, isProactive) {
   if (/\uFFFD/.test(comment) || /\?{4,}/.test(comment)) comment = "";
   const plan = defaultMotion(scene, emotion, act, comment);
   plan.seen = String(data.seen || "").trim();
-  plan.say = isProactive ? true : (Boolean(data.say ?? !!comment) && !!comment);
-  plan.intensity = clampF(data.intensity, plan.intensity);
-  plan.duration_ms = clampI(data.duration_ms, plan.duration_ms);
-  if (VALID.vis.has(data.visibility)) plan.visibility = data.visibility;
-  const m = (data.motion && typeof data.motion === "object") ? data.motion : {};
-  if (VALID.body.has(m.body)) plan.motion.body = m.body;
-  if (VALID.ball.has(m.ball)) plan.motion.ball = m.ball;
-  if (VALID.effect.has(m.effect)) plan.motion.effect = m.effect;
+  plan.activity = activity || scene;
+  // 模型只负责"理解+起草一句话";有 comment 即视为"有话可说",真正何时开口由前端(反馈层)决定。
+  plan.say = isProactive ? true : !!comment;
   return plan;
 }
 
@@ -163,21 +167,20 @@ function qwenRequest(payload, timeoutMs = 30000) {
 }
 
 function buildUserText(homeTeam, history) {
-  const hist = history && history.length ? history.join(" / ") : "(刚开始)";
-  const teamLine = homeTeam ? `用户是${homeTeam}球迷,你也向着${homeTeam},进球狂喜、丢球心疼骂街。` : "";
-  return `${teamLine}刚说过别重复:${hist}。看这帧,用北京话来句新的。给 JSON。`;
+  const team = homeTeam ? `(用户是${homeTeam}球迷,仅当这帧真在放球赛时才向着它) ` : "";
+  const hist = history && history.length ? `别重复最近说过的:${history.join(" / ")}。` : "";
+  return `${team}看这帧屏幕:如实写 seen 和 activity,再起一句紧扣 seen 的北京话 comment。${hist}给 JSON。`;
 }
 function parseImage(image) {
   const m = /^data:(image\/\w+);base64,(.*)$/s.exec(image || "");
   return { media: m ? m[1] : "image/jpeg", b64: m ? m[2] : image };
 }
 
-// 看屏解说(Qwen3-VL,默认):image 为 dataURL,返回 motion plan
-// 老炮儿话痨参数:temperature 0.9(花样多、不重复)+ max_tokens 80(短促带劲儿、出得快)
+// 理解+起草(Qwen3-VL,默认):image 为 dataURL,返回 plan(含 seen/activity/say/comment)
 async function commentateQwen(image, homeTeam, history) {
   const { media, b64 } = parseImage(image);
   const payload = {
-    model: VLM.model, max_tokens: 120, temperature: 0.9,
+    model: VLM.model, max_tokens: 150, temperature: 0.85,
     messages: [
       { role: "system", content: SYSTEM },
       { role: "user", content: [
@@ -190,11 +193,11 @@ async function commentateQwen(image, homeTeam, history) {
   return normalizePlan(extractJson(raw), false) || defaultMotion("browse", "calm", "idle", "");
 }
 
-// 看屏解说(Kimi K2.6):image 为 dataURL,返回 motion plan
+// 理解+起草(Kimi K2.6)
 async function commentateKimi(apiKey, image, homeTeam, history) {
   const { media, b64 } = parseImage(image);
   const payload = {
-    model: KIMI_MODEL, max_tokens: 120, temperature: 0.9, system: SYSTEM,
+    model: KIMI_MODEL, max_tokens: 150, temperature: 0.85, system: SYSTEM,
     messages: [{ role: "user", content: [
       { type: "image", source: { type: "base64", media_type: media, data: b64 } },
       { type: "text", text: buildUserText(homeTeam, history) },
@@ -204,7 +207,7 @@ async function commentateKimi(apiKey, image, homeTeam, history) {
   return normalizePlan(extractJson(raw), false) || defaultMotion("browse", "calm", "idle", "");
 }
 
-// 看屏解说调度:provider 选 qwen3(默认) / k2.6
+// 调度:provider 选 qwen3(默认) / k2.6
 async function commentate(opts) {
   const { provider, kimiKey, image, homeTeam, history } = opts || {};
   if (provider === "k2.6" || provider === "kimi") return commentateKimi(kimiKey, image, homeTeam, history);

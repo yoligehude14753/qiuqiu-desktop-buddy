@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.5
+
+- Top-down redesign around the real core: read screen → understand what the user is doing / what's happening → react. Replaced the football-centric persona (the fatal bug that made it talk football on every screen) with a content-grounded one.
+- Three clear layers: Perception (capture frame + cheap change signal), Understanding (model returns seen + activity + a grounded Beijing-dialect comment; football only when activity=sports), Reaction (the client decides WHEN to speak — deterministically, not relying on the small model's self-judgment).
+- Reaction fires only on a real event: first sight, activity switch, dynamic content (video/sports/game), or a significant on-screen change; otherwise it stays quiet. Near-duplicate lines are suppressed. This kills both "talks football on a code screen" and "repeats the same sentence".
+- Football costume and the GOAL/confetti effects only trigger when actually watching sports (no more Argentina kit + GOAL!!! while coding).
+
 ## 0.9.4
 
 - Reverted to the June-7 "老炮儿/Beijing-dialect chatty" feel that users liked: restored temperature 0.9 + max_tokens 80 + a 老炮儿 persona prompt with history-based "don't repeat", which produces lively, varied, grounded commentary instead of the dull/repetitive output.

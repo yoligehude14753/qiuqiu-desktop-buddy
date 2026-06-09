@@ -19,6 +19,8 @@ function saveCfg() { localStorage.setItem("kanqiu_cfg", JSON.stringify(cfg)); }
 function petLog(s) { try { window.pet.log && window.pet.log(String(s)); } catch (_) {} }
 
 let running = false, busy = false, timer = null;
+// 反馈层状态:上次"开口"时的画面指纹与活动,用来判断"是不是发生了新的事"
+let lastSpokenSig = null, lastSpokenActivity = null;
 const player = document.getElementById("player");
 const bubble = document.getElementById("bubble");
 const btext = document.getElementById("btext");
@@ -52,13 +54,11 @@ const ACT_MAP = {
   idle:     { pose: "calm",   fx: "" },
 };
 function poseImg(pose) {
-  // 默认队:日常造型;进入看球模式才换足球造型。其他国家队始终用队服。
-  if (curTeam === "default") {
-    const set = soccerMode ? SOCCER : DAILY;
-    return set[pose] || set.calm;
-  }
-  const t = TEAMS[curTeam];
-  return t[pose] || t.calm;
+  // 只有真在看球(soccerMode)才换足球/球队造型;其余一律日常电脑搭子造型——
+  // 即便选了阿根廷,写代码时也不该穿球衣。
+  if (!soccerMode) return DAILY[pose] || DAILY.calm;
+  if (curTeam !== "default" && TEAMS[curTeam]) { const t = TEAMS[curTeam]; return t[pose] || t.calm; }
+  return SOCCER[pose] || SOCCER.calm;
 }
 
 let expireTimer = null;
@@ -255,8 +255,9 @@ function runBallMotion(kind, intensity, duration) {
 }
 
 function runEffect(effect, intensity) {
-  if (effect === "goal") celebrateGoal();
-  else if (effect === "confetti") spawnConfetti(Math.round(12 + intensity * 22));
+  // GOAL!!! 只在真看球时放,别在写代码/刷网页时乱蹦进球特效
+  if (effect === "goal") { if (soccerMode) celebrateGoal(); }
+  else if (effect === "confetti" && soccerMode) spawnConfetti(Math.round(12 + intensity * 22));
 }
 
 let ballSpin = 0;
@@ -395,8 +396,25 @@ function showBubble(text) {
 // 看屏节奏(ms):老炮儿话痨,什么场景都常搭话(球赛最勤);不再给 work/idle 特殊拉长。
 const SCENE_INTERVAL = { sports: 2500, video: 4000, game: 4000, music: 6000, browse: 5000, chat: 5000, work: 6000, reading: 6000, idle: 7000 };
 
-// 防重复(只在"要不要开口"时用,不静默不拦看屏):新这句和最近几句太像就先不说,等画面变出新内容再说。
-// 直播画面在变 → 每句都新 → 照说(话痨);画面定住/重放 → 老吐一句 → 后面压住,不刷屏。
+// ===== 反馈层:决定"何时开口"(确定性,不靠小模型自觉) =====
+// 动态内容(看视频/球赛/游戏)持续给反馈;静态内容(写代码/看文档/刷网页)只在"发生了新事"时开口:
+// 首次看到 / 活动类型变了 / 画面相比上次开口有明显变化(切页面/滚动/新内容)。
+const DYNAMIC_SCENES = new Set(["sports", "video", "game"]);
+const CHANGE_THRESHOLD = 7; // 16x16 灰度均差;打字光标这类小动 < 阈值不算"新事"
+function sigDiff(a, b) {
+  if (!a || !b || a.length !== b.length) return 999;
+  let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]);
+  return s / a.length;
+}
+// 是否"发生了值得开口的新事"
+function isWorthReacting(scene, activity, sig) {
+  if (lastSpokenActivity === null) return true;            // 首次
+  if (activity && activity !== lastSpokenActivity) return true; // 切换了活动
+  if (DYNAMIC_SCENES.has(scene)) return true;             // 动态内容持续反馈(重复由去重兜底)
+  return sigDiff(sig, lastSpokenSig) >= CHANGE_THRESHOLD;  // 静态内容:画面明显变化才算新事
+}
+
+// 防重复:新这句和最近几句太像就别说(配合上面"新事"判断,避免刷同一句)。
 function _normC(s) { return String(s || "").replace(/[\s，。！!,.~、…?？:：;；"'"']+/g, "").trim(); }
 function _bigrams(s) { const g = new Set(); for (let i = 0; i < s.length - 1; i++) g.add(s.slice(i, i + 2)); return g; }
 function tooSimilarToRecent(comment) {
@@ -459,9 +477,10 @@ async function tick() {
       scene = "idle"; petLog(`capture empty perm=${cap && cap.permission}`); return;
     }
     const prevScene = AUTONOMY.lastScene;
-    // 6/7 话痨:逐帧看屏,什么场景都贫两句(由模型 say 决定;基本只在纯黑屏才闭嘴)。
+    // 理解+反馈:把"上一帧的理解"传给模型,让它对比出"正在发生什么",再决定说不说。
     const resp = await window.pet.commentate({
-      image: cap.image, homeTeam: TEAMS[curTeam].name, history: speakHistory, provider: cfg.visionProvider,
+      image: cap.image, homeTeam: TEAMS[curTeam].name, history: speakHistory,
+      provider: cfg.visionProvider, prev: lastUnderstanding,
     });
     if (resp.error) {
       statusEl.textContent = resp.error === "no_key" ? "未配置Key" : "✕";
@@ -471,17 +490,22 @@ async function tick() {
     }
     const plan = resp.plan || {};
     scene = plan.scene || "browse";
+    const activity = plan.activity || scene;
     const dt = ((Date.now() - t0) / 1000).toFixed(1);
     onSceneChanged(prevScene, scene);
     AUTONOMY.lastScene = scene;
     applyStealth(scene);
     statusEl.textContent = `${scene} ${dt}s`;
-    petLog(`scene=${scene} say=${plan.say} ${dt}s comment="${(plan.comment || "").slice(0, 48)}"`);
 
-    // 不该说就只做表情/动作,不出声
-    if (!plan.say || !plan.comment) { executeMotion(plan); return; }
-    // 和最近几句太像就先不说(画面变出新内容再说),避免刷同一句
-    if (tooSimilarToRecent(plan.comment)) { petLog(`skip similar "${plan.comment.slice(0, 24)}"`); executeMotion(plan); return; }
+    // 反馈层:理解层起草了一句话,这里决定到底要不要现在开口。
+    const hasComment = !!(plan.say && plan.comment);
+    const worth = hasComment && isWorthReacting(scene, activity, cap.sig);
+    const dup = hasComment && tooSimilarToRecent(plan.comment);
+    petLog(`act=${activity} say=${plan.say} worth=${worth} dup=${dup} ${dt}s seen="${(plan.seen || "").slice(0, 28)}" comment="${(plan.comment || "").slice(0, 36)}"`);
+
+    if (!hasComment || !worth || dup) { executeMotion(plan); return; } // 没新事/重复/没话 → 只动不说
+    lastSpokenSig = cap.sig || lastSpokenSig;
+    lastSpokenActivity = activity;
     AUTONOMY.lastSpeak = Date.now();
     pushHistory(plan.comment, plan.emotion);
     showBubble(plan.comment); // 气泡秒出(不等 TTS)
@@ -526,6 +550,7 @@ async function startWatching() {
     return;
   }
   running = true;
+  lastSpokenSig = null; lastSpokenActivity = null;
   AUTONOMY.sessionStart = Date.now(); AUTONOMY.lastSpeak = Date.now(); AUTONOMY.lastScene = null;
   STATS.sessions = (STATS.sessions || 0) + 1; saveStats();
   toggleBtn.textContent = "❚❚"; toggleBtn.className = "btn pause";
