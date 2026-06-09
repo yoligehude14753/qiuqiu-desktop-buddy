@@ -303,11 +303,24 @@ ipcMain.handle("synthesize-speech", async (e, args) => {
 });
 
 // ---- Kimi 代理:看屏解说 / 主动说话(在主进程发请求,避开浏览器 CORS) ----
-ipcMain.handle("commentate", async (e, { image, homeTeam, history, provider, changed }) => {
+ipcMain.handle("commentate", async (e, { image, homeTeam, history, provider, voice, speed, wantAudio }) => {
   const prov = provider || "qwen3";
   if (prov === "k2.6" && !userConfig.kimiKey) return { error: "no_key" };
-  try { return { plan: await kimi.commentate({ provider: prov, kimiKey: userConfig.kimiKey, image, homeTeam, history, changed }) }; }
-  catch (err) { return { error: String(err.message || err) }; }
+  try {
+    const plan = await kimi.commentate({ provider: prov, kimiKey: userConfig.kimiKey, image, homeTeam, history });
+    // 像 6/7 那样:服务端拿到解说后顺手合成语音,音频和文本一起返回 → 前端"声画同到",不再先出字幕半天没声。
+    let audio = null;
+    if (wantAudio && plan && plan.say && plan.comment) {
+      try {
+        const r = await postSpeech({
+          url: TTS_DEFAULTS.url, model: TTS_DEFAULTS.model, text: plan.comment,
+          voice: voice || TTS_DEFAULTS.voice, speed, token: TTS_DEFAULTS.token,
+        });
+        audio = r.dataUrl;
+      } catch (_) { /* TTS 失败不阻塞解说,前端可回退系统语音 */ }
+    }
+    return { plan, audio };
+  } catch (err) { return { error: String(err.message || err) }; }
 });
 ipcMain.handle("proactive", async (e, { trigger, homeTeam, history }) => {
   if (!userConfig.kimiKey) return { error: "no_key" };

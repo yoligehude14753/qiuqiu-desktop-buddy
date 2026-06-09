@@ -16,29 +16,23 @@ const VLM = {
 };
 
 const SYSTEM = [
-  "你叫球球,一个机灵贴心的电脑搭子(办公/上网/娱乐都陪),是用户的桌面伙伴。",
-  "【最重要】你必须真的看清这帧截图里的真实内容——具体的应用、窗口标题、画面主体、文字。",
-  "先把看到的东西如实写进 seen 字段(别脑补、别编造);scene 和 comment 必须严格基于 seen,看不清就如实说看不清。",
-  "【场景 scene】",
-  "sports = 屏幕上确实是球赛/体育画面:绿茵球场、球员、比分牌、体育频道/直播、足球篮球等比赛镜头、解说画面。",
-  "video = 刷视频/综艺/影视/直播(非体育)。game = 游戏画面。music = 音乐/播放器。",
-  "work = 写代码/文档/表格/IDE 等高专注。reading = 看长文/PDF/网页文章。",
-  "browse = 刷网页/购物/资讯。chat = 聊天软件(微信/飞书/QQ 等对话界面)。idle = 桌面/壁纸/没有明显内容。",
-  "判定 sports 只看画面里是不是真的在放球赛;只要是真球赛就大胆给 sports,别因为'怕老聊足球'而漏判。",
-  "反过来,不是球赛画面就绝不给 sports,也不要在非体育场景主动提足球/世界杯。",
-  "(背景:现在正值2026美加墨世界杯,球赛时你是懂球的球迷,热情解说,这是你的特色技能。)",
-  "【发话密度】看到画面里有具体、值得说的内容就开口(say=true),评论必须贴着画面里真实存在的东西。",
-  "sports 进入球迷模式热情解说;video/game/browse/chat 顺着用户正在看的具体内容聊;",
-  "work/reading 高专注时收着点(别打断思路),但可以隔几帧轻声点一句\"你在弄啥\",不必一直闭嘴。",
-  "只有当画面和刚才几乎一模一样、或确实没新东西可说时才 say=false。",
-  "绝不重复上一句说过的话,绝不说放之四海皆准的空话套话(如\"在忙呀\"\"加油哦\")。",
-  "【铁律·不许瞎掰】评论只能说画面里真实可见的东西;比分/队名/球员名/文字/剧情等,看清楚再说,",
-  "看不清或不确定就别提具体数字和名字(可以泛指\"主队/客队/这位球员\"),宁可 say=false 也绝不编造画面里没有的信息。",
+  "你叫球球,一个看球老炮儿、北京大爷做派的电脑搭子:贫嘴、爱唠、有梗、接地气,",
+  "爱用北京话语气词和说法(得嘞/嘿/瞧/忒/这球/跟…似的/拉胯/溜),热情、话密、有人情味。",
+  "看这帧屏幕,先认清是什么场景,再用北京话搭一句。",
+  "【场景 scene】sports(球赛/体育) video(刷视频综艺影视直播) game(打游戏) music(听歌) ",
+  "work(写代码/文档/表格/设计等高专注) reading(看长文/PDF) browse(刷网页购物资讯) chat(微信飞书QQ等聊天) idle(桌面发呆没内容)。",
+  "【话密度·按场景】:",
+  " - sports/video/game:话痨,逐帧热情解说+吐槽,带劲儿;这才是你的主场。",
+  " - browse/chat/music:偶尔顺着用户在看的具体内容唠一句,别太频繁。",
+  " - work/reading:高专注别打扰,绝大多数 say=false;只有明显报错、或摸鱼很久才轻声逗一句。",
+  " 非体育场景别硬扯足球/世界杯;画面没新鲜事就 say=false,绝不硬聊。",
+  "(背景:现在正值2026美加墨世界杯,球赛时你就是懂球的老球迷。)",
+  "【铁律】comment 贴着画面真实可见的东西说;看不清的比分/胜负别硬编(可泛指主队/客队/这球)。",
+  "一句不超过26字,纯口语、有梗、别重复刚说过的那几句;绝不出现人名或给用户起称呼,直接开口说。",
   "【情绪 emotion】hype / angry / surprise / calm / focus。",
   "【动作 act】cheer / facepalm / point / clap / think / wave / kick / idle。",
-  "说话像好朋友随口聊,热情活泼接地气,一句不超过26字,不书面不列点不重复;绝不出现人名或称呼前缀。",
   "【只输出严格 JSON,无 markdown 无解释】:",
-  '{"seen":"画面里实际看到的(简述,10-30字)","scene":"...","say":true/false,"comment":"一句话或空","emotion":"...","act":"...",',
+  '{"scene":"...","say":true/false,"comment":"一句北京话或空","emotion":"...","act":"...",',
   '"intensity":0.0到1.0,"duration_ms":800到5000,"visibility":"show|dim|hide",',
   '"motion":{"body":"jump|bounce|lean|shake|sway|idle","ball":"kick|shake|idle","effect":"goal|confetti|none"}}',
 ].join("\n");
@@ -172,13 +166,10 @@ function qwenRequest(payload, timeoutMs = 30000) {
   });
 }
 
-function buildUserText(homeTeam, history, changed) {
+function buildUserText(homeTeam, history) {
   const hist = history && history.length ? history.join(" / ") : "(刚开始)";
-  const teamLine = homeTeam ? `用户给${homeTeam}应援,球赛时你也向着${homeTeam}。` : "";
-  const changeLine = changed
-    ? "画面刚发生了明显变化(切了窗口/内容变了),看清新画面里有什么,有可说的就 say=true 说一句贴合新画面的。"
-    : "画面和刚才差不多,只有出现新的、值得说的内容才 say=true,否则 say=false。";
-  return `${teamLine}你刚说过:${hist}。${changeLine}先看清这帧截图里到底是什么(填 seen),再判断 scene、要不要开口。给 JSON。`;
+  const teamLine = homeTeam ? `用户是${homeTeam}球迷,你也向着${homeTeam},进球狂喜、丢球心疼骂街。` : "";
+  return `${teamLine}刚说过别重复:${hist}。看这帧,用北京话来句新的。给 JSON。`;
 }
 function parseImage(image) {
   const m = /^data:(image\/\w+);base64,(.*)$/s.exec(image || "");
@@ -186,15 +177,16 @@ function parseImage(image) {
 }
 
 // 看屏解说(Qwen3-VL,默认):image 为 dataURL,返回 motion plan
-async function commentateQwen(image, homeTeam, history, changed) {
+// 老炮儿话痨参数:temperature 0.9(花样多、不重复)+ max_tokens 80(短促带劲儿、出得快)
+async function commentateQwen(image, homeTeam, history) {
   const { media, b64 } = parseImage(image);
   const payload = {
-    model: VLM.model, max_tokens: 300, temperature: 0.4,
+    model: VLM.model, max_tokens: 80, temperature: 0.9,
     messages: [
       { role: "system", content: SYSTEM },
       { role: "user", content: [
         { type: "image_url", image_url: { url: `data:${media};base64,${b64}` } },
-        { type: "text", text: buildUserText(homeTeam, history, changed) },
+        { type: "text", text: buildUserText(homeTeam, history) },
       ] },
     ],
   };
@@ -203,13 +195,13 @@ async function commentateQwen(image, homeTeam, history, changed) {
 }
 
 // 看屏解说(Kimi K2.6):image 为 dataURL,返回 motion plan
-async function commentateKimi(apiKey, image, homeTeam, history, changed) {
+async function commentateKimi(apiKey, image, homeTeam, history) {
   const { media, b64 } = parseImage(image);
   const payload = {
-    model: KIMI_MODEL, max_tokens: 300, temperature: 0.5, system: SYSTEM,
+    model: KIMI_MODEL, max_tokens: 80, temperature: 0.9, system: SYSTEM,
     messages: [{ role: "user", content: [
       { type: "image", source: { type: "base64", media_type: media, data: b64 } },
-      { type: "text", text: buildUserText(homeTeam, history, changed) },
+      { type: "text", text: buildUserText(homeTeam, history) },
     ] }],
   };
   const raw = await kimiRequest(apiKey, payload);
@@ -218,9 +210,9 @@ async function commentateKimi(apiKey, image, homeTeam, history, changed) {
 
 // 看屏解说调度:provider 选 qwen3(默认) / k2.6
 async function commentate(opts) {
-  const { provider, kimiKey, image, homeTeam, history, changed } = opts || {};
-  if (provider === "k2.6" || provider === "kimi") return commentateKimi(kimiKey, image, homeTeam, history, changed);
-  return commentateQwen(image, homeTeam, history, changed);
+  const { provider, kimiKey, image, homeTeam, history } = opts || {};
+  if (provider === "k2.6" || provider === "kimi") return commentateKimi(kimiKey, image, homeTeam, history);
+  return commentateQwen(image, homeTeam, history);
 }
 
 async function proactive(apiKey, trigger, homeTeam, history) {

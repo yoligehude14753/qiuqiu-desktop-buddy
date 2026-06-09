@@ -358,6 +358,23 @@ function speak(text) {
   return cfg.ttsProvider === "system" ? speakSystem(text) : speakCosyVoice(text);
 }
 
+// 播放服务端随解说一起返回的音频(声画同到,无需再单独发一次 TTS)。
+function playAudioDataUrl(dataUrl) {
+  if (!dataUrl) return false;
+  if (!cfg.speak || cfg.mute) return false;
+  try {
+    if (window.speechSynthesis) speechSynthesis.cancel();
+    player.pause();
+    player.src = dataUrl;
+    player.volume = cfg.vol / 100;
+    player.onplay = startTalk;
+    player.onended = stopTalk;
+    player.onerror = () => { stopTalk(); statusEl.textContent = "音频播放失败"; };
+    player.play().catch(() => {});
+    return true;
+  } catch (_) { return false; }
+}
+
 // 最近解说历史(给 Kimi 去重)
 const speakHistory = [];
 function pushHistory(t, emotion) {
@@ -375,40 +392,15 @@ function showBubble(text) {
   clearTimeout(showBubble._t); showBubble._t = setTimeout(() => bubble.classList.remove("show"), 8000);
 }
 
-// 各场景的看屏节奏(毫秒):工作时拉很长、少打扰;球赛最勤
-// 看屏节奏(ms):看得勤,但"说不说"由 say 决定(没新内容就 say=false 不出声),所以勤看不等于话多。
-const SCENE_INTERVAL = { sports: 2500, video: 5000, game: 5000, music: 10000, browse: 6000, chat: 7000, work: 9000, reading: 9000, idle: 10000 };
+// 看屏节奏(ms):6/7 老炮儿话痨——动态场景跟得勤、逐帧解说;work/reading 由 prompt 自己 say=false 安静。
+const SCENE_INTERVAL = { sports: 2500, video: 4000, game: 4000, music: 9000, browse: 5000, chat: 6000, work: 12000, reading: 12000, idle: 12000 };
 
-// 变化驱动:动态场景(看视频/球赛/游戏)持续给反馈;静态场景(工作/阅读/浏览/聊天)只在画面"明显变化"时才开口。
-const DYNAMIC_SCENES = new Set(["sports", "video", "game"]);
-// 画面变化阈值(16x16 灰度均差 0-255):打字/光标这类小改动 < 阈值不触发;切屏/滚动/视频切换 ≥ 阈值才算明显变化。
-const CHANGE_THRESHOLD = 6;
-const MIN_SPEAK_GAP = 3000; // 最小开口间隔,防止话赶话/盖过 TTS
-let lastSig = null;
-function sigDiff(a, b) {
-  if (!a || !b || a.length !== b.length) return 999;
-  let s = 0; for (let i = 0; i < a.length; i++) s += Math.abs(a[i] - b[i]);
-  return s / a.length;
-}
-
-// 去重:VLM 对变化不大的画面常吐同一句,光靠 prompt 管不住,客户端硬挡。
+// 只挡"和最近一两句完全相同"的极端重复;变化由 temperature 0.9 + history 自然产生(6/7 的做法)。
 function _normC(s) { return String(s || "").replace(/[\s，。！!,.~、…?？:：;；"'"']+/g, "").trim(); }
-function _bigrams(s) { const g = new Set(); for (let i = 0; i < s.length - 1; i++) g.add(s.slice(i, i + 2)); return g; }
-function isDuplicateComment(comment) {
+function isExactRepeat(comment) {
   const c = _normC(comment);
-  if (!c) return true;
-  for (const h of speakHistory) {
-    const x = _normC(h);
-    if (!x) continue;
-    if (x === c) return true;
-    const short = x.length <= c.length ? x : c, long = x.length <= c.length ? c : x;
-    if (short.length >= 6 && long.includes(short)) return true; // 一句基本包含另一句
-    const ga = _bigrams(x), gb = _bigrams(c); let inter = 0;
-    ga.forEach(g => { if (gb.has(g)) inter++; });
-    const uni = ga.size + gb.size - inter;
-    if (uni > 0 && inter / uni > 0.68) return true; // 二元组相似度过高
-  }
-  return false;
+  if (!c) return false;
+  return speakHistory.slice(-2).some(h => _normC(h) === c);
 }
 let curScene = "browse";
 let stealthTimer = null;
@@ -457,21 +449,13 @@ async function tick() {
       if (cap && (cap.permission === "denied" || cap.permission === "restricted" || cap.empty)) warnScreenPermission();
       scene = "idle"; petLog(`capture empty perm=${cap && cap.permission}`); return;
     }
-    // 画面变化检测:静态场景(工作/阅读等)画面没明显变化就不打扰,连 VLM 都不调,保持安静。
-    const diff = sigDiff(cap.sig, lastSig);
-    const firstFrame = lastSig === null;
-    lastSig = cap.sig || lastSig;
     const prevScene = AUTONOMY.lastScene;
-    const dynamic = DYNAMIC_SCENES.has(prevScene);
-    if (!firstFrame && !dynamic && diff < CHANGE_THRESHOLD) {
-      scene = prevScene || "idle";
-      statusEl.textContent = `${scene}·静`;
-      petLog(`skip nochange diff=${diff.toFixed(1)} scene=${scene}`);
-      return; // 画面没变,安静,下次再看
-    }
-
-    const changed = firstFrame || diff >= CHANGE_THRESHOLD;
-    const resp = await window.pet.commentate({ image: cap.image, homeTeam: TEAMS[curTeam].name, history: speakHistory, provider: cfg.visionProvider, changed });
+    // 6/7 话痨:逐帧看屏,要不要说由模型 say 决定(work 它自己会安静);声音随文本一起返回。
+    const wantAudio = cfg.ttsProvider !== "system" && cfg.speak && !cfg.mute;
+    const resp = await window.pet.commentate({
+      image: cap.image, homeTeam: TEAMS[curTeam].name, history: speakHistory,
+      provider: cfg.visionProvider, voice: cfg.ttsVoice, speed: cfg.rate / 100, wantAudio,
+    });
     if (resp.error) {
       statusEl.textContent = resp.error === "no_key" ? "未配置Key" : "✕";
       petLog(`commentate error: ${resp.error}`);
@@ -485,22 +469,18 @@ async function tick() {
     AUTONOMY.lastScene = scene;
     applyStealth(scene);
     statusEl.textContent = `${scene} ${dt}s`;
-    petLog(`scene=${scene} say=${plan.say} diff=${diff.toFixed(1)} ${dt}s seen="${(plan.seen || "").slice(0, 44)}" comment="${(plan.comment || "").slice(0, 44)}"`);
+    petLog(`scene=${scene} say=${plan.say} ${dt}s comment="${(plan.comment || "").slice(0, 48)}"`);
 
     // 不该说就只做表情/动作,不出声
     if (!plan.say || !plan.comment) { executeMotion(plan); return; }
-    // 去重 + 最小间隔(由画面变化驱动开口,不再用固定长冷却)
-    const tooSoon = (Date.now() - AUTONOMY.lastSpeak) < MIN_SPEAK_GAP;
-    if (tooSoon || isDuplicateComment(plan.comment)) {
-      petLog(`suppress(${tooSoon ? "gap" : "dup"}) "${(plan.comment || "").slice(0, 30)}"`);
-      executeMotion(plan);
-      return;
-    }
+    // 只挡完全重复的那一句(其余靠 temperature 0.9 + history 自然变化)
+    if (isExactRepeat(plan.comment)) { petLog(`skip exact-repeat "${plan.comment.slice(0, 24)}"`); executeMotion(plan); return; }
     AUTONOMY.lastSpeak = Date.now();
     pushHistory(plan.comment, plan.emotion);
     showBubble(plan.comment);
     executeMotion(plan);
-    speak(plan.comment);
+    // 声画同到:优先播服务端返回的音频;没有则回退系统语音。
+    if (resp.audio) playAudioDataUrl(resp.audio); else speak(plan.comment);
   } catch (e) { statusEl.textContent = "✕"; petLog(`tick exception: ${e && e.message || e}`); console.error(e); }
   finally {
     busy = false;

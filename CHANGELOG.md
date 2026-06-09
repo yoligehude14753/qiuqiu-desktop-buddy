@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.4
+
+- Reverted to the June-7 "老炮儿/Beijing-dialect chatty" feel that users liked: restored temperature 0.9 + max_tokens 80 + a 老炮儿 persona prompt with history-based "don't repeat", which produces lively, varied, grounded commentary instead of the dull/repetitive output.
+- Removed the change-detection gating, similarity-dedup and time cooldowns added earlier (they made it feel dumb and stuck). Per-frame commentary again; quiet on work is handled by the prompt's say=false.
+- Audio now returns inline with the comment (server-side synth), so text and voice arrive together instead of the bubble showing long before the voice. (TTS model unchanged: cosyvoice-v2 / longxiaochun_v2 — the earlier slowness was the relay + a separate client TTS round-trip.)
+- Kept a minimal exact-repeat guard so the very same line is never spoken twice in a row.
+
 ## 0.9.3
 
 - Default screen-reading model is now the local Qwen3-VL-8B (heyi-bj) via the Cloudflare gateway: fast (~2s) and needs no user key. Kimi K2.6 is now an optional choice (requires your own key) selectable in settings.
