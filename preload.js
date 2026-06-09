@@ -3,10 +3,10 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("pet", {
   captureScreen: () => ipcRenderer.invoke("capture-screen"),
   commentate: (args) => ipcRenderer.invoke("commentate", args),
-  proactive: (args) => ipcRenderer.invoke("proactive", args),
   getConfig: () => ipcRenderer.invoke("get-config"),
   setConfig: (patch) => ipcRenderer.invoke("set-config", patch),
-  testKey: (key) => ipcRenderer.invoke("test-key", key),
+  testKey: (arg) => ipcRenderer.invoke("test-key", arg),
+  log: (line) => ipcRenderer.send("buddy-log", line),
   setIgnoreMouse: (ignore) => ipcRenderer.send("set-ignore-mouse", ignore),
   toggleClickThrough: () => ipcRenderer.send("toggle-click-through"),
   onClickThroughChanged: (handler) => ipcRenderer.on("click-through-changed", (_, value) => handler(value)),

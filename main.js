@@ -113,10 +113,10 @@ function toggleClickThrough() {
 }
 
 // 渲染进程请求抓全屏 → 返回一帧 dataURL
+// ~900px + JPEG:实测 1280 PNG 在 Qwen3-VL 上要 6-13s,900 JPEG 只要 ~2s,质量足够读清。
 ipcMain.handle("capture-screen", async () => {
   const { width, height } = screen.getPrimaryDisplay().size;
-  // 抓取时缩放,降带宽;最大边 ~1280
-  const scale = Math.min(1, 1280 / Math.max(width, height));
+  const scale = Math.min(1, 900 / Math.max(width, height));
   const sources = await desktopCapturer.getSources({
     types: ["screen"],
     thumbnailSize: {
@@ -125,8 +125,19 @@ ipcMain.handle("capture-screen", async () => {
     },
   });
   if (!sources.length) return null;
-  // 默认抓主屏(第一个)
-  return sources[0].thumbnail.toDataURL();
+  const jpeg = sources[0].thumbnail.toJPEG(75);
+  return "data:image/jpeg;base64," + jpeg.toString("base64");
+});
+
+// 运行日志:写到 userData/buddy.log(自动截断),排查"说了啥/多快/为什么不说"。
+function logPath() { return path.join(app.getPath("userData"), "buddy.log"); }
+ipcMain.on("buddy-log", (e, line) => {
+  try {
+    const f = logPath();
+    const stamp = new Date().toISOString().replace("T", " ").slice(0, 19);
+    fs.appendFileSync(f, `${stamp} ${String(line).slice(0, 400)}\n`);
+    if (fs.statSync(f).size > 256 * 1024) fs.writeFileSync(f, fs.readFileSync(f, "utf8").slice(-128 * 1024));
+  } catch (_) {}
 });
 
 // 鼠标穿透开关(气泡区域可点,数字人区域可拖)

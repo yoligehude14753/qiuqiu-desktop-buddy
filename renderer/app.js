@@ -401,7 +401,7 @@ async function tick() {
     applyStealth(scene);
     const dt = ((Date.now() - t0) / 1000).toFixed(1);
     statusEl.textContent = `${plan.activity || scene} ${dt}s`;
-    petLog(`act=${plan.activity || scene} ${dt}s seen="${(plan.seen || "").slice(0, 30)}" comment="${(plan.comment || "").slice(0, 40)}"`);
+    petLog(`act=${plan.activity || scene} say=${plan.say} ${dt}s comment="${(plan.comment || "").slice(0, 40)}"`);
 
     if (!plan.say || !plan.comment) { executeMotion(plan); return; }   // 该闭嘴(按场景密度) → 只动不出声
     if (isNearDup(plan.comment)) { petLog("skip dup"); executeMotion(plan); return; } // 和最近太像 → 不重复
@@ -511,6 +511,7 @@ function syncSettingsUI() {
   document.getElementById("speak").checked = cfg.speak;
   document.getElementById("team").value = curTeam;
   document.querySelectorAll("#runtimeSeg button").forEach(b => b.classList.toggle("on", b.dataset.v === cfg.runtime));
+  const vp = document.getElementById("visionProvider"); if (vp) vp.value = cfg.visionProvider;
 }
 document.querySelectorAll("#runtimeSeg button").forEach(b => b.onclick = async () => {
   await setRuntime(b.dataset.v); syncSettingsUI();

@@ -100,9 +100,14 @@
   <!-- 设置面板 -->
   <div class="panel" id="settingsPanel">
     <h3>设置 <span class="x" data-close="settingsPanel">✕</span></h3>
+    <div class="row"><label>看屏模型</label>
+      <select id="visionProvider">
+        <option value="qwen3">Qwen3-VL（内置·免Key）</option>
+        <option value="k2.6">Kimi K2.6（需自带Key）</option>
+      </select></div>
     <div class="keybox">
-      <label>Kimi API Key</label>
-      <input id="kimiKey" type="password" placeholder="填入你的 Kimi Key，本机保存"/>
+      <label>Kimi API Key（仅 K2.6 需要）</label>
+      <input id="kimiKey" type="password" placeholder="选 K2.6 时填入你的 Kimi Key"/>
       <div class="key-actions">
         <button id="saveKey">保存</button>
         <button class="secondary" id="testKey">测试</button>
