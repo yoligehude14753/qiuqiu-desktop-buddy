@@ -9,12 +9,14 @@ let win = null;
 let clickThrough = false;
 
 // ---- 内置服务端点(封装进 app,用户无需配置) ----
-// 看屏 = Kimi(见 kimi.js,用用户填的 Kimi Key);语音 = heyi CosyVoice(开放端点,无需 key)。
-// 用户只需在设置里填"自己生成的 Kimi Key",其余服务出厂即用。
+// 看屏 = Kimi(见 kimi.js,用用户填的 Kimi Key);语音 = heyi CosyVoice2,经 Cloudflare 公网网关。
+// 走公网网关而非 Tailscale 直连:任意用户可达,且避开 DERP 中继(实测公网 ~2s vs 中继 12-30s)。
+// 用户只需在设置里填"自己生成的 Kimi Key",语音端点+网关 token 已出厂内置。
 const TTS_DEFAULTS = {
-  url: "http://100.87.251.9:8092", // heyi-bj CosyVoice(Tailscale)
+  url: "https://tts2.yoliyoli.uk", // heyi CosyVoice2 公网网关(Cloudflare)
   model: "cosyvoice-v2",
   voice: "longxiaochun_v2",
+  token: "__GATEWAY_TOKEN_REMOVED__",
 };
 
 // ---- 用户配置(存到 userData/config.json),含 Kimi Key ----
@@ -202,7 +204,7 @@ ipcMain.handle("test-key", async (e, key) => {
   catch (err) { return { ok: false, error: String(err.message || err) }; }
 });
 
-function postSpeech({ url, text, model, voice, speed }) {
+function postSpeech({ url, text, model, voice, speed, token }) {
   return new Promise((resolve, reject) => {
     const target = new URL((url || "").replace(/\/+$/, "") + "/v1/audio/speech");
     const lib = target.protocol === "https:" ? https : http;
@@ -213,16 +215,18 @@ function postSpeech({ url, text, model, voice, speed }) {
       response_format: "mp3",
       speed: Number(speed || 1),
     });
+    const headers = {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(body),
+    };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
     const req = lib.request({
       protocol: target.protocol,
       hostname: target.hostname,
       port: target.port,
       path: target.pathname + target.search,
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(body),
-      },
+      headers,
       timeout: 30000,
     }, (res) => {
       const chunks = [];
@@ -251,6 +255,7 @@ ipcMain.handle("synthesize-speech", async (e, args) => {
       text: a.text,
       voice: a.voice || TTS_DEFAULTS.voice,
       speed: a.speed,
+      token: TTS_DEFAULTS.token,
     })) };
   } catch (err) { return { ok: false, error: String(err.message || err) }; }
 });

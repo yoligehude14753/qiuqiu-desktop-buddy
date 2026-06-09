@@ -8,6 +8,7 @@
 - Reworked the screen-reading prompt to read-before-classify (grounded `seen` field) and to reliably enter sports mode on real match footage; lowered temperature for stable classification.
 - Bundled the service endpoints into the app (screen reading via Kimi, speech via built-in CosyVoice): users only paste one self-generated Kimi key and everything else works out of the box.
 - Replaced the editable TTS URL with a built-in CosyVoice endpoint and a real Chinese voice picker (温柔女 / 知性女 / 磁性男 / 童声), defaulting to a warm female voice.
+- Routed speech through the public Cloudflare gateway (tts2.yoliyoli.uk) instead of the Tailscale relay: cut synth latency from 12-30s back to ~2s and made it reachable for any user, not just the tailnet.
 
 ## 0.9.1
 
