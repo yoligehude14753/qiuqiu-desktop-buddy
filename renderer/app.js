@@ -395,6 +395,8 @@ function isNearDup(comment) {
 const NUDGE_SILENCE_MS = 55000;
 let firstTickPending = false;
 const rejectedDrafts = []; // 被去重拦掉的草稿,传回模型避免它反复起草同一句
+// 典故轮换池:随机指方向,破小模型"逮住一个梗用到死"(实测它会句句'哈兰德的突破')
+const FLAVORS = ["门将和扑救", "教练和换人", "VAR和争议判罚", "点球大战", "越位陷阱", "世界杯历史名场面", "解说员名梗", "球迷看台文化", "转会费和身价", "任意球大师"];
 async function tick() {
   if (busy || !running) return;
   busy = true;
@@ -409,7 +411,8 @@ async function tick() {
     const nudge = !first && (Date.now() - lastSpokeAt) > NUDGE_SILENCE_MS;
     // history = 已说过的 + 被拦掉的废稿(让模型别再起草同一句)
     const histAll = speakHistory.concat(rejectedDrafts).slice(-8);
-    const resp = await window.pet.commentate({ image: img, homeTeam: TEAMS[curTeam].name, history: histAll, provider: cfg.visionProvider, first, nudge, persona: cfg.persona });
+    const flavor = FLAVORS[Math.floor(Math.random() * FLAVORS.length)];
+    const resp = await window.pet.commentate({ image: img, homeTeam: TEAMS[curTeam].name, history: histAll, provider: cfg.visionProvider, first, nudge, persona: cfg.persona, flavor });
     if (resp.error) {
       statusEl.textContent = resp.error === "no_key" ? "未配置Key" : "✕";
       if (resp.error === "no_key") { openKeyPanel(); reschedule = false; }
