@@ -3,7 +3,21 @@ const fs = require("fs");
 const path = require("path");
 const https = require("https");
 const http = require("http");
+const crypto = require("crypto");
 const kimi = require("./kimi");
+
+// 激活码门禁:用户拿到我们签发的一个 Key 才能用(底层模型/网关 token 已封装,不对外暴露用法)。
+// 代码里只存 SHA-256 哈希,明文激活码线下发放。
+const ACTIVATION_HASHES = new Set([
+  "8a0ce3873ef07f851d6780dc92e106adfa7a859c72fe21625ea25becfc028b9b",
+  "04c672860072a566e308c2ecd041ad9ace117bef4879f4080b776ab6a4df4a9d",
+  "49ef7e06d57fd5587f5efe89586b04419a49de79311f40c44c70fc105989c212",
+  "f65e4759a4375c3b0fd463c926a74883d107019eb1931b4b262a0af1a5dbe4a8",
+  "c7281e4c66e196941667f5578e330977a276215eb6b46e2ca398af671b3c2039",
+  "03130b8202afabbe9e114e0a4ad592d697317b9fb9258eb454ba8d17b0e5a284",
+]);
+function sha256(s) { return crypto.createHash("sha256").update(String(s).trim()).digest("hex"); }
+function isActivated() { return !!(userConfig.activation && ACTIVATION_HASHES.has(sha256(userConfig.activation))); }
 
 let win = null;
 let clickThrough = false;
@@ -162,11 +176,11 @@ ipcMain.on("toggle-running", () => {
 ipcMain.on("quit-app", () => app.quit());
 
 // ---- 配置:读 / 写 / 测 Key ----
-ipcMain.handle("get-config", () => ({ kimiKey: userConfig.kimiKey || "", hasKey: !!userConfig.kimiKey, version: app.getVersion() }));
+ipcMain.handle("get-config", () => ({ kimiKey: userConfig.kimiKey || "", hasKey: !!userConfig.kimiKey, version: app.getVersion(), activated: isActivated() }));
 ipcMain.handle("set-config", (e, patch) => {
   userConfig = Object.assign({}, userConfig, patch || {});
   saveConfig(userConfig);
-  return { ok: true, hasKey: !!userConfig.kimiKey };
+  return { ok: true, hasKey: !!userConfig.kimiKey, activated: isActivated() };
 });
 ipcMain.handle("test-key", async (e, arg) => {
   const provider = (arg && arg.provider) || "qwen3";
@@ -178,6 +192,7 @@ ipcMain.handle("test-key", async (e, arg) => {
 // ---- Kimi 代理:看屏解说 / 主动说话(在主进程发请求,避开浏览器 CORS) ----
 ipcMain.handle("commentate", async (e, { image, homeTeam, history, provider, first, nudge, persona, flavor, lang }) => {
   const prov = provider || "qwen3";
+  if (!isActivated()) return { error: "not_activated" };
   if (prov === "k2.6" && !userConfig.kimiKey) return { error: "no_key" };
   try {
     // 立即返回 plan,语音由渲染层另发请求并行合成——别让 TTS 拖慢下一轮看屏
@@ -186,6 +201,7 @@ ipcMain.handle("commentate", async (e, { image, homeTeam, history, provider, fir
 });
 
 ipcMain.handle("synth-speech", async (e, { text }) => {
+  if (!isActivated()) return { error: "not_activated" };
   try { return { audio: await synthSpeech(text) }; }
   catch (err) { return { error: String(err.message || err) }; }
 });

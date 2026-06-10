@@ -1,5 +1,6 @@
 // 球球 · 桌面电脑搭子 渲染层(纯本地 + Kimi 云 API,用户自带 Key)
 let hasKey = false;
+let activated = false;
 
 // ---- 设置(本地持久化) ----
 const DEFAULTS = { interval: 3000, vol: 90, mute: false, auto: true, speak: true, team: "default", runtime: "sprite", visionProvider: "qwen3", persona: "beijing", lang: "zh" };
@@ -403,6 +404,7 @@ async function tick() {
   const t0 = Date.now();
   try {
     statusEl.textContent = "👀";
+    if (!activated) { openPanel("settingsPanel"); statusEl.textContent = "未激活"; reschedule = false; return; }
     if (needsKey() && !hasKey) { openKeyPanel(); reschedule = false; return; }
     const img = await window.pet.captureScreen();
     if (!img) { return; }
@@ -414,7 +416,8 @@ async function tick() {
     const flavor = pool[Math.floor(Math.random() * pool.length)];
     const resp = await window.pet.commentate({ image: img, homeTeam: TEAMS[curTeam].name, history: histAll, provider: cfg.visionProvider, first, nudge, persona: cfg.persona, flavor, lang: cfg.lang });
     if (resp.error) {
-      statusEl.textContent = resp.error === "no_key" ? "未配置Key" : "✕";
+      statusEl.textContent = resp.error === "not_activated" ? "未激活" : (resp.error === "no_key" ? "未配置Key" : "✕");
+      if (resp.error === "not_activated") { openPanel("settingsPanel"); showBubble("先填激活码再开始。"); reschedule = false; return; }
       if (resp.error === "no_key") { openKeyPanel(); reschedule = false; }
       return;
     }
@@ -479,7 +482,8 @@ function stopWatching() {
 }
 async function autoStart() {
   statusEl.textContent = "待命";
-  try { const c = await window.pet.getConfig(); hasKey = !!c.hasKey; } catch (_) { hasKey = false; }
+  try { const c = await window.pet.getConfig(); hasKey = !!c.hasKey; activated = !!c.activated; } catch (_) { hasKey = false; }
+  if (!activated) { openPanel("settingsPanel"); showBubble("先填激活码(找发行方领取),再点绿色播放。"); return; }
   if (needsKey() && !hasKey) { openKeyPanel(); return; }
   if (cfg.auto) setTimeout(() => startWatching(), 700);
 }
@@ -503,6 +507,9 @@ async function refreshKeyUI() {
     const c = await window.pet.getConfig();
     hasKey = !!c.hasKey;
     const ver = document.getElementById("appVer"); if (ver && c.version) ver.textContent = "v" + c.version;
+    activated = !!c.activated;
+    const as = document.getElementById("actStatus");
+    if (as) { as.textContent = activated ? "已激活" : "未激活"; as.style.color = activated ? "#2ea043" : "#f0883e"; }
     const input = document.getElementById("kimiKey");
     if (input && c.kimiKey && !input.value) input.value = c.kimiKey;
     setKeyStatus(hasKey ? "已保存" : "未配置", hasKey);
@@ -590,6 +597,15 @@ document.getElementById("voiceTest").onclick = () => {
   showBubble("试一下，我现在能说话吗？");
   const ok = speak("试一下，我现在能说话吗？");
   statusEl.textContent = ok ? "试音中" : statusEl.textContent;
+};
+document.getElementById("saveAct").onclick = async () => {
+  const k = document.getElementById("actKey").value.trim();
+  if (!k) return;
+  const r = await window.pet.setConfig({ activation: k });
+  activated = !!r.activated;
+  const as = document.getElementById("actStatus");
+  if (as) { as.textContent = activated ? "已激活" : "激活码无效"; as.style.color = activated ? "#2ea043" : "#f0883e"; }
+  if (activated) { showBubble("激活成功,开始陪你看球。"); if (cfg.auto && !running) startWatching(); }
 };
 document.getElementById("saveKey").onclick = async () => {
   const key = document.getElementById("kimiKey").value.trim();

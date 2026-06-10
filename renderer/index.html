@@ -100,6 +100,14 @@
   <!-- 设置面板 -->
   <div class="panel" id="settingsPanel">
     <h3>设置 <span class="x" data-close="settingsPanel">✕</span></h3>
+    <div class="keybox">
+      <label>激活码（必填，找发行方领取）</label>
+      <input id="actKey" type="password" placeholder="QQDZ-XXXX-XXXX"/>
+      <div class="key-actions">
+        <button id="saveAct">激活</button>
+        <span id="actStatus">未激活</span>
+      </div>
+    </div>
     <div class="row"><label>语言</label>
       <select id="lang">
         <option value="zh">中文</option>
