@@ -2,7 +2,7 @@
 let hasKey = false;
 
 // ---- 设置(本地持久化) ----
-const DEFAULTS = { interval: 5000, vol: 90, mute: false, auto: true, speak: true, team: "default", runtime: "sprite", visionProvider: "qwen3" };
+const DEFAULTS = { interval: 3000, vol: 90, mute: false, auto: true, speak: true, team: "default", runtime: "sprite", visionProvider: "qwen3", persona: "beijing" };
 let cfg = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem("kanqiu_cfg") || "{}"));
 if (cfg.runtime === "rig") cfg.runtime = "sprite"; // 移除惊悚的骨骼切块版
 function saveCfg() { localStorage.setItem("kanqiu_cfg", JSON.stringify(cfg)); }
@@ -364,16 +364,30 @@ function scheduleNext(scene) {
 // 防重复:新这句和最近几句太像就先不说(等画面出新内容再说),避免刷同一句。
 function _normC(s) { return String(s || "").replace(/[\s，。！!,.~、…?？:：;；"'"']+/g, "").trim(); }
 function _bigrams(s) { const g = new Set(); for (let i = 0; i < s.length - 1; i++) g.add(s.slice(i, i + 2)); return g; }
+// 两句是否共享 ≥n 字连续片段(逮"口癖":同一比喻/同一词组反复出现)
+function _sharedPhrase(a, b, n) {
+  if (a.length < n || b.length < n) return false;
+  const grams = new Set();
+  for (let i = 0; i + n <= a.length; i++) grams.add(a.slice(i, i + n));
+  for (let i = 0; i + n <= b.length; i++) if (grams.has(b.slice(i, i + n))) return true;
+  return false;
+}
 function isNearDup(comment) {
   const c = _normC(comment); if (!c) return true;
-  for (const h of speakHistory.slice(-4)) {
+  for (const h of speakHistory.slice(-6)) {
     const x = _normC(h); if (!x) continue;
     if (x === c) return true;
     const a = x.length <= c.length ? x : c, b = x.length <= c.length ? c : x;
     if (a.length >= 5 && b.includes(a)) return true;
+    if (_sharedPhrase(x, c, 5)) return true; // 共享5字以上口癖片段 → 视为重复
     const ga = _bigrams(x), gb = _bigrams(c); let inter = 0; ga.forEach(g => { if (gb.has(g)) inter++; });
     const uni = ga.size + gb.size - inter;
-    if (uni > 0 && inter / uni > 0.6) return true;
+    if (uni > 0 && inter / uni > 0.52) return true; // 换个说法重复同一意思也挡住
+  }
+  // 开头口癖:和最近3句中任意一句开头2个字相同 → 视为重复(逮"老铁…/老铁…""瞅见…/瞅见…"这种)
+  for (const h of speakHistory.slice(-3)) {
+    const x = _normC(h);
+    if (x && c.slice(0, 2) === x.slice(0, 2)) return true;
   }
   return false;
 }
@@ -394,7 +408,7 @@ async function tick() {
     if (!img) { return; }
     const first = firstTickPending;
     const nudge = !first && (Date.now() - lastSpokeAt) > NUDGE_SILENCE_MS;
-    const resp = await window.pet.commentate({ image: img, homeTeam: TEAMS[curTeam].name, history: speakHistory, provider: cfg.visionProvider, first, nudge });
+    const resp = await window.pet.commentate({ image: img, homeTeam: TEAMS[curTeam].name, history: speakHistory, provider: cfg.visionProvider, first, nudge, persona: cfg.persona });
     if (resp.error) {
       statusEl.textContent = resp.error === "no_key" ? "未配置Key" : "✕";
       if (resp.error === "no_key") { openKeyPanel(); reschedule = false; }
@@ -407,12 +421,13 @@ async function tick() {
     applyStealth(scene);
     const dt = ((Date.now() - t0) / 1000).toFixed(1);
     statusEl.textContent = `${plan.activity || scene} ${dt}s`;
-    petLog(`act=${plan.activity || scene} say=${plan.say}${first ? " first" : ""}${nudge ? " nudge" : ""} ${dt}s comment="${(plan.comment || "").slice(0, 40)}"`);
+    petLog(`act=${plan.activity || scene} say=${plan.say}${first ? " first" : ""}${nudge ? " nudge" : ""} ${dt}s seen="${(plan.seen || "").slice(0, 36)}" comment="${(plan.comment || "").slice(0, 40)}"`);
 
     if (!plan.say || !plan.comment) { executeMotion(plan); return; }   // 该闭嘴(按场景密度) → 只动不出声
-    // 去重:常规帧和最近4句比;first/nudge 帧只挡"和上一句完全一样",保证该开口时真开口
+    // 去重:常规帧和最近6句比;first/nudge 帧放宽但仍挡"完全一样/共享口癖片段"
+    const lastSaid = _normC(speakHistory[speakHistory.length - 1] || "");
     const dup = (first || nudge)
-      ? _normC(plan.comment) === _normC(speakHistory[speakHistory.length - 1] || "")
+      ? (_normC(plan.comment) === lastSaid || _sharedPhrase(_normC(plan.comment), lastSaid, 5))
       : isNearDup(plan.comment);
     if (dup) { petLog("skip dup"); executeMotion(plan); return; }
     lastSpokeAt = Date.now();
@@ -523,7 +538,13 @@ function syncSettingsUI() {
   document.getElementById("team").value = curTeam;
   document.querySelectorAll("#runtimeSeg button").forEach(b => b.classList.toggle("on", b.dataset.v === cfg.runtime));
   const vp = document.getElementById("visionProvider"); if (vp) vp.value = cfg.visionProvider;
+  const ps = document.getElementById("persona"); if (ps) ps.value = cfg.persona;
 }
+document.getElementById("persona")?.addEventListener("change", (e) => {
+  cfg.persona = e.target.value; saveCfg();
+  const names = { beijing: "得嘞,北京老炮儿伺候着!", shanghai: "灵额,阿拉上海爷叔来咧~", shandong: "中!俺山东大汉陪恁!", dongbei: "老铁放心,嘎嘎能唠!" };
+  showBubble(names[cfg.persona] || "人设换好了!");
+});
 document.querySelectorAll("#runtimeSeg button").forEach(b => b.onclick = async () => {
   await setRuntime(b.dataset.v); syncSettingsUI();
   showBubble(cfg.runtime === "live2d" ? "换上会动的我啦~" : "回到日常造型。");
