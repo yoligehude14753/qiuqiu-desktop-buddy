@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.9
+
+- Backend proxy: the app no longer bundles any service token. It only sends the user's activation code (X-Activation); a proxy on the server validates it and forwards to the screen-reading / TTS services. The public app/source/binary contain no secret.
+- Activation code is offline-distributed; only its SHA-256 hash lives in code (and on the proxy). One shared code logs everyone in.
+- Per-code rate limiting on the proxy to curb abuse.
+
 ## 0.9.6
 
 - Simplified back to the design that worked: per-frame screen-reading with the original (June-7) neutral prompt — a general desktop companion that only switches to football mode when there is actually a match on screen.

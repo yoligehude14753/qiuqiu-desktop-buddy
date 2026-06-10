@@ -3,21 +3,11 @@
 //  - 默认 Qwen3-VL-8B(heyi 本地,经公网网关,免 Key,~2s);可选 Kimi K2.6(需用户 Key)。
 const https = require("https");
 
-const http = require("http");
-
 const KIMI = { host: "api.kimi.com", path: "/coding/v1/messages", model: "kimi-k2.6" };
-// VLM 双路:公网网关(任何用户可达) + Tailscale 直连(本机代理劫持 *.yoliyoli.uk 时的兜底)。
-// 哪条通用哪条,失败自动切换并记住。
-// 网关 token 从本机不入库的 secret.js 注入(公开源码里没有明文)
-let GATEWAY_TOKEN = "";
-try { GATEWAY_TOKEN = require("./secret").GATEWAY_TOKEN || ""; } catch (_) {}
-const VLM_TOKEN = GATEWAY_TOKEN;
+// 看屏走后端代理:app 不含任何服务 token,只带用户激活码(X-Activation)。
+// 代理在 heyi-bj 上校验激活码并转发到本机 Qwen3-VL,公开下载也不泄露 token。
 const VLM_MODEL = "Qwen3-VL-8B";
-const VLM_ROUTES = [
-  { name: "gateway", tls: true, host: "llm.yoliyoli.uk", port: 443, path: "/vl/v1/chat/completions", headers: { Authorization: `Bearer ${VLM_TOKEN}` } },
-  { name: "tailscale", tls: false, host: "100.87.251.9", port: 7870, path: "/v1/chat/completions", headers: {} },
-];
-let vlmRouteIdx = 0;
+const VLM_PROXY = { host: "llm.yoliyoli.uk", path: "/qiuqiu/vl/v1/chat/completions" };
 
 // ===== 人设层(只换说话风格,铁律共享) =====
 // 注意:绝不能在人设里给"示例词表"——小模型会把示例词当口癖逐句复读(踩过坑:"整活儿的节奏"刷屏)。
@@ -197,18 +187,11 @@ async function viaQwen(image, homeTeam, history, opts) {
         { type: "text", text: buildUser(homeTeam, history, opts) },
       ] },
     ] };
-  // 双路自动切换:当前路失败 → 换另一路重试,成功的路记为首选(超时收紧到12s,别拖死循环)
-  for (let attempt = 0; attempt < VLM_ROUTES.length; attempt++) {
-    const r = VLM_ROUTES[vlmRouteIdx];
-    try {
-      const j = await request({ host: r.host, port: r.port, path: r.path, tls: r.tls, headers: r.headers }, payload, 10000);
-      const msg = (j.choices && j.choices[0] && j.choices[0].message) || {};
-      return normalizePlan(extractJson(msg.content || msg.reasoning_content || ""));
-    } catch (e) {
-      vlmRouteIdx = (vlmRouteIdx + 1) % VLM_ROUTES.length; // 失败切路
-      if (attempt === VLM_ROUTES.length - 1) throw e;
-    }
-  }
+  const j = await request(
+    { host: VLM_PROXY.host, path: VLM_PROXY.path, headers: { "X-Activation": (opts && opts.activation) || "" } },
+    payload, 20000);
+  const msg = (j.choices && j.choices[0] && j.choices[0].message) || {};
+  return normalizePlan(extractJson(msg.content || msg.reasoning_content || ""));
 }
 
 async function viaKimi(apiKey, image, homeTeam, history, opts) {
@@ -226,21 +209,20 @@ async function viaKimi(apiKey, image, homeTeam, history, opts) {
   return normalizePlan(extractJson(text));
 }
 
-async function commentate({ provider, kimiKey, image, homeTeam, history, first, nudge, persona, flavor, lang }) {
+async function commentate({ provider, kimiKey, image, homeTeam, history, first, nudge, persona, flavor, lang, activation }) {
   const plan = (provider === "k2.6" || provider === "kimi")
-    ? await viaKimi(kimiKey, image, homeTeam, history, { first, nudge, persona, flavor, lang })
-    : await viaQwen(image, homeTeam, history, { first, nudge, persona, flavor, lang });
+    ? await viaKimi(kimiKey, image, homeTeam, history, { first, nudge, persona, flavor, lang, activation })
+    : await viaQwen(image, homeTeam, history, { first, nudge, persona, flavor, lang, activation });
   return plan || defaultMotion("browse", "calm", "idle", "");
 }
 
-async function testProvider({ provider, kimiKey }) {
+async function testProvider({ provider, kimiKey, activation }) {
   if (provider === "k2.6" || provider === "kimi") {
     const j = await request({ host: KIMI.host, path: KIMI.path, headers: { "x-api-key": kimiKey, "anthropic-version": "2023-06-01" } },
       { model: KIMI.model, max_tokens: 8, messages: [{ role: "user", content: "说:ok" }] }, 15000);
     return Boolean(j);
   }
-  const r = VLM_ROUTES[vlmRouteIdx];
-  const j = await request({ host: r.host, port: r.port, path: r.path, tls: r.tls, headers: r.headers },
+  const j = await request({ host: VLM_PROXY.host, path: VLM_PROXY.path, headers: { "X-Activation": activation || "" } },
     { model: VLM_MODEL, max_tokens: 5, temperature: 0, messages: [{ role: "user", content: "说ok" }] }, 15000);
   return Boolean(j);
 }

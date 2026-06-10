@@ -18,23 +18,16 @@ function isActivated() { return !!(userConfig.activation && ACTIVATION_HASHES.ha
 let win = null;
 let clickThrough = false;
 
-// 语音:CosyVoice2(longxiaochun_v2),与 6/7 北京腔版同款音色。
-// 双路:公网网关(任何用户可达) + Tailscale 直连(本机代理劫持 *.yoliyoli.uk 时兜底),失败自动切换。
-let TTS_TOKEN = "";
-try { TTS_TOKEN = require("./secret").GATEWAY_TOKEN || ""; } catch (_) {}
-const TTS_ROUTES = [
-  { tls: true, host: "tts2.yoliyoli.uk", port: 443, headers: { Authorization: `Bearer ${TTS_TOKEN}` } },
-  { tls: false, host: "100.87.251.9", port: 8092, headers: {} },
-];
-let ttsRouteIdx = 0;
-const TTS = { model: "cosyvoice-v2", voice: "longxiaochun_v2" };
-function synthOnce(route, body, timeoutMs) {
+// 语音:CosyVoice2(longxiaochun_v2),经后端代理(激活码鉴权),app 不含任何 token。
+const TTS = { host: "llm.yoliyoli.uk", path: "/qiuqiu/tts/v1/audio/speech", model: "cosyvoice-v2", voice: "longxiaochun_v2" };
+function synthSpeech(text) {
   return new Promise((resolve, reject) => {
-    const lib = route.tls ? https : http;
-    const req = lib.request({
-      hostname: route.host, port: route.port, path: "/v1/audio/speech", method: "POST",
-      headers: Object.assign({ "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }, route.headers),
-      timeout: timeoutMs,
+    if (!text) return resolve(null);
+    const body = JSON.stringify({ model: TTS.model, input: text, voice: TTS.voice, response_format: "mp3" });
+    const req = https.request({
+      hostname: TTS.host, path: TTS.path, method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body), "X-Activation": userConfig.activation || "" },
+      timeout: 20000,
     }, (res) => {
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
@@ -49,18 +42,6 @@ function synthOnce(route, body, timeoutMs) {
     req.on("error", reject);
     req.write(body); req.end();
   });
-}
-async function synthSpeech(text) {
-  if (!text) return null;
-  const body = JSON.stringify({ model: TTS.model, input: text, voice: TTS.voice, response_format: "mp3" });
-  for (let attempt = 0; attempt < TTS_ROUTES.length; attempt++) {
-    const r = TTS_ROUTES[ttsRouteIdx];
-    try { return await synthOnce(r, body, 15000); }
-    catch (e) {
-      ttsRouteIdx = (ttsRouteIdx + 1) % TTS_ROUTES.length;
-      if (attempt === TTS_ROUTES.length - 1) throw e;
-    }
-  }
 }
 
 // ---- 用户配置(存到 userData/config.json),含 Kimi Key ----
@@ -182,7 +163,7 @@ ipcMain.handle("set-config", (e, patch) => {
 ipcMain.handle("test-key", async (e, arg) => {
   const provider = (arg && arg.provider) || "qwen3";
   const key = (arg && arg.key) || (typeof arg === "string" ? arg : "") || userConfig.kimiKey;
-  try { await kimi.testProvider({ provider, kimiKey: key }); return { ok: true }; }
+  try { await kimi.testProvider({ provider, kimiKey: key, activation: userConfig.activation }); return { ok: true }; }
   catch (err) { return { ok: false, error: String(err.message || err) }; }
 });
 
