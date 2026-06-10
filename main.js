@@ -162,7 +162,7 @@ ipcMain.on("toggle-running", () => {
 ipcMain.on("quit-app", () => app.quit());
 
 // ---- 配置:读 / 写 / 测 Key ----
-ipcMain.handle("get-config", () => ({ kimiKey: userConfig.kimiKey || "", hasKey: !!userConfig.kimiKey }));
+ipcMain.handle("get-config", () => ({ kimiKey: userConfig.kimiKey || "", hasKey: !!userConfig.kimiKey, version: app.getVersion() }));
 ipcMain.handle("set-config", (e, patch) => {
   userConfig = Object.assign({}, userConfig, patch || {});
   saveConfig(userConfig);

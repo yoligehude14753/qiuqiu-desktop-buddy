@@ -496,6 +496,7 @@ async function refreshKeyUI() {
   try {
     const c = await window.pet.getConfig();
     hasKey = !!c.hasKey;
+    const ver = document.getElementById("appVer"); if (ver && c.version) ver.textContent = "v" + c.version;
     const input = document.getElementById("kimiKey");
     if (input && c.kimiKey && !input.value) input.value = c.kimiKey;
     setKeyStatus(hasKey ? "已保存" : "未配置", hasKey);
@@ -637,6 +638,7 @@ document.getElementById("team").onchange = (e) => {
 // 启动
 syncSettingsUI();
 refreshKeyUI();
+charEl.src = poseImg("calm"); // 启动即按当前队伍/足球魂渲染造型(修:初始图硬编码成卫衣装)
 ballEl.style.display = "block";
 ballIdle();
 if (cfg.runtime === "rig" || cfg.runtime === "live2d") setRuntime(cfg.runtime);
