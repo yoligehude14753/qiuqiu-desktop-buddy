@@ -179,6 +179,10 @@ ipcMain.handle("commentate", async (e, { image, homeTeam, history, provider, fir
 
 app.whenReady().then(() => {
   userConfig = loadConfig();
+  // 启动时记录版本与启动方式,排查"跑的是哪个构建"
+  try {
+    fs.appendFileSync(logPath(), `${new Date().toISOString().replace("T", " ").slice(0, 19)} === app v${app.getVersion()} started (packaged=${app.isPackaged}) ===\n`);
+  } catch (_) {}
   createWindow();
   globalShortcut.register("CommandOrControl+Shift+K", toggleClickThrough);
   globalShortcut.register("CommandOrControl+Shift+P", () => {
