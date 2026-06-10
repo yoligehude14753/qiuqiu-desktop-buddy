@@ -8,9 +8,9 @@ const kimi = require("./kimi");
 
 // 激活码门禁:用户拿到我们签发的一个 Key 才能用(底层模型/网关 token 已封装,不对外暴露用法)。
 // 代码里只存 SHA-256 哈希,明文激活码线下发放。
+// 全员通用激活码:明文不入库(线下发放),这里只存 SHA-256 哈希。
 const ACTIVATION_HASHES = new Set([
-  // 全员通用激活码:__ACTIVATION_REMOVED__(明文不入库,只存哈希)
-  "dc801cf2cfe88629aaade007797c06cd4b72f4ee7cefb800d8705fbef8256467",
+  "a6e7a760740c9afa1b1273ff11ad1341d3043dcc7ad1248c63c35639bd6302e1",
 ]);
 function sha256(s) { return crypto.createHash("sha256").update(String(s).trim()).digest("hex"); }
 function isActivated() { return !!(userConfig.activation && ACTIVATION_HASHES.has(sha256(userConfig.activation))); }
@@ -20,7 +20,8 @@ let clickThrough = false;
 
 // 语音:CosyVoice2(longxiaochun_v2),与 6/7 北京腔版同款音色。
 // 双路:公网网关(任何用户可达) + Tailscale 直连(本机代理劫持 *.yoliyoli.uk 时兜底),失败自动切换。
-const TTS_TOKEN = "__GATEWAY_TOKEN_REMOVED__";
+let TTS_TOKEN = "";
+try { TTS_TOKEN = require("./secret").GATEWAY_TOKEN || ""; } catch (_) {}
 const TTS_ROUTES = [
   { tls: true, host: "tts2.yoliyoli.uk", port: 443, headers: { Authorization: `Bearer ${TTS_TOKEN}` } },
   { tls: false, host: "100.87.251.9", port: 8092, headers: {} },

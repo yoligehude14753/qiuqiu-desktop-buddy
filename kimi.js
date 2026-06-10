@@ -8,7 +8,10 @@ const http = require("http");
 const KIMI = { host: "api.kimi.com", path: "/coding/v1/messages", model: "kimi-k2.6" };
 // VLM 双路:公网网关(任何用户可达) + Tailscale 直连(本机代理劫持 *.yoliyoli.uk 时的兜底)。
 // 哪条通用哪条,失败自动切换并记住。
-const VLM_TOKEN = "__GATEWAY_TOKEN_REMOVED__";
+// 网关 token 从本机不入库的 secret.js 注入(公开源码里没有明文)
+let GATEWAY_TOKEN = "";
+try { GATEWAY_TOKEN = require("./secret").GATEWAY_TOKEN || ""; } catch (_) {}
+const VLM_TOKEN = GATEWAY_TOKEN;
 const VLM_MODEL = "Qwen3-VL-8B";
 const VLM_ROUTES = [
   { name: "gateway", tls: true, host: "llm.yoliyoli.uk", port: 443, path: "/vl/v1/chat/completions", headers: { Authorization: `Bearer ${VLM_TOKEN}` } },
