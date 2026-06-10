@@ -100,14 +100,21 @@ function parseImage(image) {
   const m = /^data:(image\/\w+);base64,(.*)$/s.exec(image || "");
   return { media: m ? m[1] : "image/jpeg", b64: m ? m[2] : image };
 }
-function buildUser(homeTeam, history) {
+function buildUser(homeTeam, history, opts) {
+  const o = opts || {};
   const hist = history && history.length ? history.join(" / ") : "(刚开始)";
   // 注意:不在这里注入主队/球迷信息,否则会诱导模型在非球赛画面也扯足球。
   // 主队应援只在"画面真是球赛"时才提(由 SYSTEM 控制),模型会从画面里的球衣自行判断。
+  if (o.first) {
+    return `这是你刚开始陪伴的第一帧,必须开口(say=true):简短打个照面,顺带点评一句用户正在干的事(紧贴画面,别提足球除非真在看球)。给 JSON。`;
+  }
+  if (o.nudge) {
+    return `刚才我说过:${hist}。你已经好一阵没说话了,这帧就开口(say=true)轻声唠一句——紧贴画面里正在做/正在发生的事,给一句新的、别和刚才重复。给 JSON。`;
+  }
   return `刚才我说过:${hist}。看现在这帧画面里用户在干嘛,要不要开口、说啥?评论只针对画面里真实有的东西,给一句新的、别和刚才重复。给 JSON。`;
 }
 
-async function viaQwen(image, homeTeam, history) {
+async function viaQwen(image, homeTeam, history, opts) {
   const { media, b64 } = parseImage(image);
   const j = await request(
     { host: VLM.host, path: VLM.path, headers: { Authorization: `Bearer ${VLM.token}` } },
@@ -115,31 +122,31 @@ async function viaQwen(image, homeTeam, history) {
       { role: "system", content: SYSTEM },
       { role: "user", content: [
         { type: "image_url", image_url: { url: `data:${media};base64,${b64}` } },
-        { type: "text", text: buildUser(homeTeam, history) },
+        { type: "text", text: buildUser(homeTeam, history, opts) },
       ] },
     ] });
   const msg = (j.choices && j.choices[0] && j.choices[0].message) || {};
   return normalizePlan(extractJson(msg.content || msg.reasoning_content || ""));
 }
 
-async function viaKimi(apiKey, image, homeTeam, history) {
+async function viaKimi(apiKey, image, homeTeam, history, opts) {
   const { media, b64 } = parseImage(image);
   const j = await request(
     { host: KIMI.host, path: KIMI.path, headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" } },
     { model: KIMI.model, max_tokens: 110, temperature: 0.9, system: SYSTEM, messages: [
       { role: "user", content: [
         { type: "image", source: { type: "base64", media_type: media, data: b64 } },
-        { type: "text", text: buildUser(homeTeam, history) },
+        { type: "text", text: buildUser(homeTeam, history, opts) },
       ] },
     ] });
   const text = (j.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
   return normalizePlan(extractJson(text));
 }
 
-async function commentate({ provider, kimiKey, image, homeTeam, history }) {
+async function commentate({ provider, kimiKey, image, homeTeam, history, first, nudge }) {
   const plan = (provider === "k2.6" || provider === "kimi")
-    ? await viaKimi(kimiKey, image, homeTeam, history)
-    : await viaQwen(image, homeTeam, history);
+    ? await viaKimi(kimiKey, image, homeTeam, history, { first, nudge })
+    : await viaQwen(image, homeTeam, history, { first, nudge });
   return plan || defaultMotion("browse", "calm", "idle", "");
 }
 

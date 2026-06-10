@@ -340,8 +340,7 @@ function showBubble(text) {
   clearTimeout(showBubble._t); showBubble._t = setTimeout(() => bubble.classList.remove("show"), 8000);
 }
 
-// 看屏节奏(ms):自调度,每次跑完再排下一次。球赛勤、其它适中;不再给 work 特殊拉长。
-const SCENE_INTERVAL = { sports: 3000, video: 4000, game: 4000, music: 8000, browse: 5000, chat: 6000, work: 7000, reading: 7000, idle: 8000 };
+// 看屏节奏(ms):对齐 6/7 网页版——统一用用户设置的间隔(默认5s,可选3/5/8s),球赛加紧到 3s。
 let curScene = "browse";
 const STATE = { sessionStart: Date.now(), lastScene: null };
 let lastSpokeAt = 0, loopTimer = null;
@@ -358,7 +357,8 @@ function applyStealth(scene) {
 function scheduleNext(scene) {
   clearTimeout(loopTimer);
   if (!running) return;
-  loopTimer = setTimeout(tick, SCENE_INTERVAL[scene] || cfg.interval);
+  const ms = scene === "sports" ? Math.min(cfg.interval, 3000) : cfg.interval;
+  loopTimer = setTimeout(tick, ms);
 }
 
 // 防重复:新这句和最近几句太像就先不说(等画面出新内容再说),避免刷同一句。
@@ -379,6 +379,9 @@ function isNearDup(comment) {
 }
 
 // 核心循环:看屏 → 理解 → 反馈。说什么只来自当前画面;没新内容/重复就只动不说,绝不主动唠废话。
+// 节奏保障:启动第一帧必开口(打照面+点评正在做的事);静默超 55s 这帧提示模型开口唠一句。
+const NUDGE_SILENCE_MS = 55000;
+let firstTickPending = false;
 async function tick() {
   if (busy || !running) return;
   busy = true;
@@ -389,22 +392,29 @@ async function tick() {
     if (needsKey() && !hasKey) { openKeyPanel(); reschedule = false; return; }
     const img = await window.pet.captureScreen();
     if (!img) { return; }
-    const resp = await window.pet.commentate({ image: img, homeTeam: TEAMS[curTeam].name, history: speakHistory, provider: cfg.visionProvider });
+    const first = firstTickPending;
+    const nudge = !first && (Date.now() - lastSpokeAt) > NUDGE_SILENCE_MS;
+    const resp = await window.pet.commentate({ image: img, homeTeam: TEAMS[curTeam].name, history: speakHistory, provider: cfg.visionProvider, first, nudge });
     if (resp.error) {
       statusEl.textContent = resp.error === "no_key" ? "未配置Key" : "✕";
       if (resp.error === "no_key") { openKeyPanel(); reschedule = false; }
       return;
     }
+    firstTickPending = false;
     const plan = resp.plan || {};
     scene = plan.scene || "browse";
     STATE.lastScene = scene;
     applyStealth(scene);
     const dt = ((Date.now() - t0) / 1000).toFixed(1);
     statusEl.textContent = `${plan.activity || scene} ${dt}s`;
-    petLog(`act=${plan.activity || scene} say=${plan.say} ${dt}s comment="${(plan.comment || "").slice(0, 40)}"`);
+    petLog(`act=${plan.activity || scene} say=${plan.say}${first ? " first" : ""}${nudge ? " nudge" : ""} ${dt}s comment="${(plan.comment || "").slice(0, 40)}"`);
 
     if (!plan.say || !plan.comment) { executeMotion(plan); return; }   // 该闭嘴(按场景密度) → 只动不出声
-    if (isNearDup(plan.comment)) { petLog("skip dup"); executeMotion(plan); return; } // 和最近太像 → 不重复
+    // 去重:常规帧和最近4句比;first/nudge 帧只挡"和上一句完全一样",保证该开口时真开口
+    const dup = (first || nudge)
+      ? _normC(plan.comment) === _normC(speakHistory[speakHistory.length - 1] || "")
+      : isNearDup(plan.comment);
+    if (dup) { petLog("skip dup"); executeMotion(plan); return; }
     lastSpokeAt = Date.now();
     pushHistory(plan.comment, plan.emotion);
     showBubble(plan.comment);            // 气泡秒出
@@ -418,7 +428,8 @@ let idleTimer = null;
 async function startWatching() {
   if (needsKey() && !hasKey) { statusEl.textContent = "未配置Key"; openKeyPanel(); return; }
   running = true;
-  STATE.sessionStart = Date.now(); STATE.lastScene = null; lastSpokeAt = 0;
+  STATE.sessionStart = Date.now(); STATE.lastScene = null;
+  lastSpokeAt = Date.now(); firstTickPending = true; // 第一帧必开口打照面
   STATS.sessions = (STATS.sessions || 0) + 1; saveStats();
   toggleBtn.textContent = "❚❚"; toggleBtn.className = "btn pause";
   clearTimeout(loopTimer); tick();
