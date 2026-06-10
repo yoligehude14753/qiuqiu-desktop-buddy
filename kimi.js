@@ -25,9 +25,43 @@ const PERSONAS = {
   shandong: "你叫球球,山东实在大汉:豪爽大嗓门,憨直仗义,夸人狠批评也直,自带乡土幽默。",
   dongbei: "你叫球球,东北唠嗑老铁:自来熟,包袱多,啥事都能给你唠出喜剧效果。",
 };
+// 英文人设:对应同样的"口音风味"定位
+const PERSONAS_EN = {
+  beijing: "You are Qiuqiu, a wisecracking New York buddy: quick roasts, street-smart banter, never mean-spirited.",
+  shanghai: "You are Qiuqiu, a posh London pundit: dry wit, understated sarcasm, impeccable timing.",
+  shandong: "You are Qiuqiu, a hearty Texan pal: loud, warm, brutally honest, folksy humor.",
+  dongbei: "You are Qiuqiu, a stand-up-comedian sidekick: motormouth, endless bits, makes everything a punchline.",
+};
+
+// 英文版共享规则(与中文版同结构:足球魂逗哏+信息增量+禁口癖+画面≠文字)
+function buildSystemEn(persona) {
+  const style = PERSONAS_EN[persona] || PERSONAS_EN.beijing;
+  return (
+    style +
+    " Deep down you are football-obsessed (it's the 2026 World Cup): player lore, manager anecdotes, tactics memes — you relate everything to football.\n" +
+    "You are the funny lead, not a yes-man: your value is INFORMATION GAIN — say things NOT written on screen, make the user go 'huh!' or laugh.\n" +
+    "Two steps, never reversed:\n" +
+    "Step 1 - Read the screen (seen): write what is concretely visible in THIS frame. On video sites, only the LARGE player area is what's playing now; " +
+    "sidebar thumbnails/titles are recommendations — never put title claims into seen as on-screen action. If you can't identify a player, write 'a player'; never guess names from titles.\n" +
+    "Step 2 - The quip (comment): for sports frames, commentate the VISIBLE action (save/shot/run/foul) with player lore or tactical takes — never read out the score or page title. " +
+    "For any other screen (coding/chat/browsing/video), riff on the concrete content but season it with football metaphors (e.g. 'this code is tighter than a low block').\n" +
+    "INFORMATION-GAIN RULE: never just restate on-screen text (titles/scores/filenames) — add judgment, metaphor, lore, prediction or roast; pure restating = rejected draft.\n" +
+    "HARD RULES:\n" +
+    " 1. One event, one comment — no rephrasing the same idea; nothing new on screen => say=false, never force small talk.\n" +
+    " 2. No verbal tics: openings, structures and phrases must differ from 'recent lines'; never reuse a phrase or the same player name in consecutive lines.\n" +
+    " 3. Never mention real names of the user or chat contacts; no nicknames for the user; one sentence, max 18 words, casual spoken English.\n" +
+    " 4. Talk like a normal person: plain declarative sentences, no exclamation marks except a true goal-level moment; humor from substance, not hype words.\n" +
+    "emotion: hype / angry / surprise / calm / focus. act: cheer / facepalm / point / clap / think / wave / kick / idle.\n" +
+    "Output STRICT JSON only, no markdown:\n" +
+    '{"seen":"what is concretely visible, <=12 words","scene":"sports|video|game|music|work|reading|browse|chat|idle",' +
+    '"say":true/false,"comment":"one English sentence mixing a concrete on-screen detail with football flavor, empty if silent",' +
+    '"emotion":"hype|angry|surprise|calm|focus","act":"cheer|facepalm|point|clap|think|wave|kick|idle"}'
+  );
+}
 
 // 共享规则:足球魂逗哏——信息增量来自"足球知识 × 画面内容"混搭;同一意思只说一次。
-function buildSystem(persona) {
+function buildSystem(persona, lang) {
+  if (lang === "en") return buildSystemEn(persona);
   const style = PERSONAS[persona] || PERSONAS.beijing;
   return (
     style +
@@ -129,6 +163,13 @@ function parseImage(image) {
 }
 function buildUser(homeTeam, history, opts) {
   const o = opts || {};
+  if (o.lang === "en") {
+    const histE = history && history.length ? history.join(" / ") : "(just started)";
+    const flavorE = o.flavor ? `Switch football seasoning: pull from ${o.flavor}; do not reuse players/metaphors already used. ` : "";
+    if (o.first) return "First frame of the session: you MUST speak (say=true) — a quick hello plus one quip about what the user is doing on screen. JSON only.";
+    if (o.nudge) return `Recent lines (including rejected drafts, none may be repeated): ${histE}. ${flavorE}You have been quiet a while — speak this frame (say=true) with one fresh line about what is happening on screen. JSON only.`;
+    return `Recent lines (including rejected drafts, none may be repeated): ${histE}. ${flavorE}Look at this frame: if there is anything new or quip-worthy, say=true with one line; same event/same idea as before => say=false. Only comment on what is really visible. JSON only.`;
+  }
   const hist = history && history.length ? history.join(" / ") : "(刚开始)";
   const flavor = o.flavor ? `这次足球佐料换方向:从${o.flavor}找梗,刚用过的球员/比喻一律不准再用。` : "";
   // 注意:不在这里注入主队/球迷信息,否则会诱导模型在非球赛画面也扯足球。
@@ -143,7 +184,7 @@ function buildUser(homeTeam, history, opts) {
 }
 
 async function viaQwen(image, homeTeam, history, opts) {
-  const SYSTEM = buildSystem(opts && opts.persona);
+  const SYSTEM = buildSystem(opts && opts.persona, opts && opts.lang);
   const { media, b64 } = parseImage(image);
   const payload = {
     model: VLM_MODEL, max_tokens: 90, temperature: 0.7, messages: [
@@ -168,7 +209,7 @@ async function viaQwen(image, homeTeam, history, opts) {
 }
 
 async function viaKimi(apiKey, image, homeTeam, history, opts) {
-  const SYSTEM = buildSystem(opts && opts.persona);
+  const SYSTEM = buildSystem(opts && opts.persona, opts && opts.lang);
   const { media, b64 } = parseImage(image);
   const j = await request(
     { host: KIMI.host, path: KIMI.path, headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" } },
@@ -182,10 +223,10 @@ async function viaKimi(apiKey, image, homeTeam, history, opts) {
   return normalizePlan(extractJson(text));
 }
 
-async function commentate({ provider, kimiKey, image, homeTeam, history, first, nudge, persona, flavor }) {
+async function commentate({ provider, kimiKey, image, homeTeam, history, first, nudge, persona, flavor, lang }) {
   const plan = (provider === "k2.6" || provider === "kimi")
-    ? await viaKimi(kimiKey, image, homeTeam, history, { first, nudge, persona, flavor })
-    : await viaQwen(image, homeTeam, history, { first, nudge, persona, flavor });
+    ? await viaKimi(kimiKey, image, homeTeam, history, { first, nudge, persona, flavor, lang })
+    : await viaQwen(image, homeTeam, history, { first, nudge, persona, flavor, lang });
   return plan || defaultMotion("browse", "calm", "idle", "");
 }
 

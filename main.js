@@ -176,12 +176,12 @@ ipcMain.handle("test-key", async (e, arg) => {
 });
 
 // ---- Kimi 代理:看屏解说 / 主动说话(在主进程发请求,避开浏览器 CORS) ----
-ipcMain.handle("commentate", async (e, { image, homeTeam, history, provider, first, nudge, persona, flavor }) => {
+ipcMain.handle("commentate", async (e, { image, homeTeam, history, provider, first, nudge, persona, flavor, lang }) => {
   const prov = provider || "qwen3";
   if (prov === "k2.6" && !userConfig.kimiKey) return { error: "no_key" };
   try {
     // 立即返回 plan,语音由渲染层另发请求并行合成——别让 TTS 拖慢下一轮看屏
-    return { plan: await kimi.commentate({ provider: prov, kimiKey: userConfig.kimiKey, image, homeTeam, history, first, nudge, persona, flavor }) };
+    return { plan: await kimi.commentate({ provider: prov, kimiKey: userConfig.kimiKey, image, homeTeam, history, first, nudge, persona, flavor, lang }) };
   } catch (err) { return { error: String(err.message || err) }; }
 });
 

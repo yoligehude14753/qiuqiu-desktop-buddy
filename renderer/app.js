@@ -2,7 +2,7 @@
 let hasKey = false;
 
 // ---- 设置(本地持久化) ----
-const DEFAULTS = { interval: 3000, vol: 90, mute: false, auto: true, speak: true, team: "default", runtime: "sprite", visionProvider: "qwen3", persona: "beijing" };
+const DEFAULTS = { interval: 3000, vol: 90, mute: false, auto: true, speak: true, team: "default", runtime: "sprite", visionProvider: "qwen3", persona: "beijing", lang: "zh" };
 let cfg = Object.assign({}, DEFAULTS, JSON.parse(localStorage.getItem("kanqiu_cfg") || "{}"));
 if (cfg.runtime === "rig") cfg.runtime = "sprite"; // 移除惊悚的骨骼切块版
 function saveCfg() { localStorage.setItem("kanqiu_cfg", JSON.stringify(cfg)); }
@@ -58,13 +58,12 @@ function react(emotion, act) {
   // 动效
   charEl.classList.remove("jump", "bounce", "lean", "wave");
   void charEl.offsetWidth;
-  if (m.fx === "jump") { charEl.classList.add("jump"); kickBall(); celebrateGoal(); }
+  if (m.fx === "jump") { charEl.classList.add("jump"); kickBall(); }
   else if (m.fx === "kick") kickBall();
   else if (m.fx === "shake") shakeBall();
   else if (m.fx === "bounce") charEl.classList.add("bounce");
   else if (m.fx === "lean") charEl.classList.add("lean");
   else if (m.fx === "wave") charEl.classList.add("wave");
-  if (emotion === "hype") celebrateGoal();
   // 几秒后回到平静待机
   clearTimeout(expireTimer);
   expireTimer = setTimeout(() => { charEl.src = poseImg("calm"); }, 7000);
@@ -244,9 +243,8 @@ function runBallMotion(kind, intensity, duration) {
 }
 
 function runEffect(effect, intensity) {
-  // GOAL!!! / 彩纸只在真看球时放,别在写代码刷网页时乱蹦
-  if (effect === "goal") { if (soccerMode) celebrateGoal(); }
-  else if (effect === "confetti" && soccerMode) spawnConfetti(Math.round(12 + intensity * 22));
+  // GOAL!!! 弹字动画已按用户要求取消;hype/goal 只撒彩纸
+  if (effect === "goal" || effect === "confetti") spawnConfetti(Math.round(12 + intensity * 22));
 }
 
 let ballSpin = 0;
@@ -397,6 +395,7 @@ let firstTickPending = false;
 const rejectedDrafts = []; // 被去重拦掉的草稿,传回模型避免它反复起草同一句
 // 典故轮换池:随机指方向,破小模型"逮住一个梗用到死"(实测它会句句'哈兰德的突破')
 const FLAVORS = ["门将和扑救", "教练和换人", "VAR和争议判罚", "点球大战", "越位陷阱", "世界杯历史名场面", "解说员名梗", "球迷看台文化", "转会费和身价", "任意球大师"];
+const FLAVORS_EN = ["goalkeepers and saves", "managers and substitutions", "VAR controversies", "penalty shootouts", "offside traps", "iconic World Cup moments", "famous commentary lines", "fan culture", "transfer fees", "free-kick specialists"];
 async function tick() {
   if (busy || !running) return;
   busy = true;
@@ -411,8 +410,9 @@ async function tick() {
     const nudge = !first && (Date.now() - lastSpokeAt) > NUDGE_SILENCE_MS;
     // history = 已说过的 + 被拦掉的废稿(让模型别再起草同一句)
     const histAll = speakHistory.concat(rejectedDrafts).slice(-8);
-    const flavor = FLAVORS[Math.floor(Math.random() * FLAVORS.length)];
-    const resp = await window.pet.commentate({ image: img, homeTeam: TEAMS[curTeam].name, history: histAll, provider: cfg.visionProvider, first, nudge, persona: cfg.persona, flavor });
+    const pool = cfg.lang === "en" ? FLAVORS_EN : FLAVORS;
+    const flavor = pool[Math.floor(Math.random() * pool.length)];
+    const resp = await window.pet.commentate({ image: img, homeTeam: TEAMS[curTeam].name, history: histAll, provider: cfg.visionProvider, first, nudge, persona: cfg.persona, flavor, lang: cfg.lang });
     if (resp.error) {
       statusEl.textContent = resp.error === "no_key" ? "未配置Key" : "✕";
       if (resp.error === "no_key") { openKeyPanel(); reschedule = false; }
@@ -559,7 +559,12 @@ function syncSettingsUI() {
   document.querySelectorAll("#runtimeSeg button").forEach(b => b.classList.toggle("on", b.dataset.v === cfg.runtime));
   const vp = document.getElementById("visionProvider"); if (vp) vp.value = cfg.visionProvider;
   const ps = document.getElementById("persona"); if (ps) ps.value = cfg.persona;
+  const lg = document.getElementById("lang"); if (lg) lg.value = cfg.lang;
 }
+document.getElementById("lang")?.addEventListener("change", (e) => {
+  cfg.lang = e.target.value; saveCfg();
+  showBubble(cfg.lang === "en" ? "English mode on. Let's talk football." : "中文模式,接着唠。");
+});
 document.getElementById("persona")?.addEventListener("change", (e) => {
   cfg.persona = e.target.value; saveCfg();
   const names = { beijing: "得嘞,北京老炮儿伺候着!", shanghai: "灵额,阿拉上海爷叔来咧~", shandong: "中!俺山东大汉陪恁!", dongbei: "老铁放心,嘎嘎能唠!" };
