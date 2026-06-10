@@ -396,6 +396,7 @@ function isNearDup(comment) {
 // 节奏保障:启动第一帧必开口(打照面+点评正在做的事);静默超 55s 这帧提示模型开口唠一句。
 const NUDGE_SILENCE_MS = 55000;
 let firstTickPending = false;
+const rejectedDrafts = []; // 被去重拦掉的草稿,传回模型避免它反复起草同一句
 async function tick() {
   if (busy || !running) return;
   busy = true;
@@ -408,7 +409,9 @@ async function tick() {
     if (!img) { return; }
     const first = firstTickPending;
     const nudge = !first && (Date.now() - lastSpokeAt) > NUDGE_SILENCE_MS;
-    const resp = await window.pet.commentate({ image: img, homeTeam: TEAMS[curTeam].name, history: speakHistory, provider: cfg.visionProvider, first, nudge, persona: cfg.persona });
+    // history = 已说过的 + 被拦掉的废稿(让模型别再起草同一句)
+    const histAll = speakHistory.concat(rejectedDrafts).slice(-8);
+    const resp = await window.pet.commentate({ image: img, homeTeam: TEAMS[curTeam].name, history: histAll, provider: cfg.visionProvider, first, nudge, persona: cfg.persona });
     if (resp.error) {
       statusEl.textContent = resp.error === "no_key" ? "未配置Key" : "✕";
       if (resp.error === "no_key") { openKeyPanel(); reschedule = false; }
@@ -429,7 +432,19 @@ async function tick() {
     const dup = (first || nudge)
       ? (_normC(plan.comment) === lastSaid || _sharedPhrase(_normC(plan.comment), lastSaid, 5))
       : isNearDup(plan.comment);
-    if (dup) { petLog("skip dup"); executeMotion(plan); return; }
+    if (dup) {
+      petLog("skip dup");
+      // 关键:被拦的句子也记入"别重复"列表,否则模型不知道这句已废,会永远重新起草同一句
+      rejectedDrafts.push(plan.comment);
+      if (rejectedDrafts.length > 4) rejectedDrafts.shift();
+      // 动态场景(球赛/视频/游戏)沉默时也给个可见的小动作,别像死机
+      if (["sports", "video", "game"].includes(scene)) {
+        const a = ["bounce", "lean", "sway"][Math.floor(Math.random() * 3)];
+        executeMotion({ emotion: plan.emotion || "calm", act: plan.act, intensity: 0.45, duration_ms: 1200, motion: { body: a, ball: soccerMode ? "kick" : "idle", effect: "none" } });
+      } else executeMotion(plan);
+      return;
+    }
+    rejectedDrafts.length = 0; // 说出新句子后清空废稿列表
     lastSpokeAt = Date.now();
     pushHistory(plan.comment, plan.emotion);
     showBubble(plan.comment);            // 气泡秒出
