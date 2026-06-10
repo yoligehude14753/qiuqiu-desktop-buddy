@@ -9,12 +9,8 @@ const kimi = require("./kimi");
 // 激活码门禁:用户拿到我们签发的一个 Key 才能用(底层模型/网关 token 已封装,不对外暴露用法)。
 // 代码里只存 SHA-256 哈希,明文激活码线下发放。
 const ACTIVATION_HASHES = new Set([
-  "8a0ce3873ef07f851d6780dc92e106adfa7a859c72fe21625ea25becfc028b9b",
-  "04c672860072a566e308c2ecd041ad9ace117bef4879f4080b776ab6a4df4a9d",
-  "49ef7e06d57fd5587f5efe89586b04419a49de79311f40c44c70fc105989c212",
-  "f65e4759a4375c3b0fd463c926a74883d107019eb1931b4b262a0af1a5dbe4a8",
-  "c7281e4c66e196941667f5578e330977a276215eb6b46e2ca398af671b3c2039",
-  "03130b8202afabbe9e114e0a4ad592d697317b9fb9258eb454ba8d17b0e5a284",
+  // 全员通用激活码:__ACTIVATION_REMOVED__(明文不入库,只存哈希)
+  "dc801cf2cfe88629aaade007797c06cd4b72f4ee7cefb800d8705fbef8256467",
 ]);
 function sha256(s) { return crypto.createHash("sha256").update(String(s).trim()).digest("hex"); }
 function isActivated() { return !!(userConfig.activation && ACTIVATION_HASHES.has(sha256(userConfig.activation))); }
