@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("pet", {
   getConfig: () => ipcRenderer.invoke("get-config"),
   setConfig: (patch) => ipcRenderer.invoke("set-config", patch),
   testKey: (arg) => ipcRenderer.invoke("test-key", arg),
+  synthSpeech: (text) => ipcRenderer.invoke("synth-speech", { text }),
   log: (line) => ipcRenderer.send("buddy-log", line),
   setIgnoreMouse: (ignore) => ipcRenderer.send("set-ignore-mouse", ignore),
   toggleClickThrough: () => ipcRenderer.send("toggle-click-through"),

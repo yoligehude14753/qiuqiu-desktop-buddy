@@ -450,7 +450,10 @@ async function tick() {
     pushHistory(plan.comment, plan.emotion);
     showBubble(plan.comment);            // 气泡秒出
     executeMotion(plan);                 // 配动作/表情
-    say(plan.comment, resp.audio);       // CosyVoice 北京腔(声画同到),失败回退系统语音
+    // 语音并行合成,不阻塞本轮收尾与下一轮看屏(忽快忽慢的主因之一就是 TTS 串行)
+    window.pet.synthSpeech(plan.comment).then(r => {
+      if (r && r.audio) say(plan.comment, r.audio); else speak(plan.comment);
+    }).catch(() => speak(plan.comment));
   } catch (e) { statusEl.textContent = "✕"; petLog(`tick err: ${e && e.message}`); console.error(e); }
   finally { busy = false; if (reschedule && running) scheduleNext(scene); }
 }

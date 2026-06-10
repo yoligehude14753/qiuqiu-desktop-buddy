@@ -180,11 +180,14 @@ ipcMain.handle("commentate", async (e, { image, homeTeam, history, provider, fir
   const prov = provider || "qwen3";
   if (prov === "k2.6" && !userConfig.kimiKey) return { error: "no_key" };
   try {
-    const plan = await kimi.commentate({ provider: prov, kimiKey: userConfig.kimiKey, image, homeTeam, history, first, nudge, persona, flavor });
-    let audio = null;
-    if (plan && plan.comment) { try { audio = await synthSpeech(plan.comment); } catch (_) {} }
-    return { plan, audio };
+    // 立即返回 plan,语音由渲染层另发请求并行合成——别让 TTS 拖慢下一轮看屏
+    return { plan: await kimi.commentate({ provider: prov, kimiKey: userConfig.kimiKey, image, homeTeam, history, first, nudge, persona, flavor }) };
   } catch (err) { return { error: String(err.message || err) }; }
+});
+
+ipcMain.handle("synth-speech", async (e, { text }) => {
+  try { return { audio: await synthSpeech(text) }; }
+  catch (err) { return { error: String(err.message || err) }; }
 });
 
 app.whenReady().then(() => {
