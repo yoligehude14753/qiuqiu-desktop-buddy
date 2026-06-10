@@ -30,7 +30,7 @@ const TEAMS = {
   brazil:    { name: "巴西",   calm: "models/team_brazil.png" },
 };
 let curTeam = cfg.team || "default";
-let soccerMode = false; // 仅在检测到球赛画面时切换为看球造型
+let soccerMode = true; // 足球魂常驻:不再按场景切换造型,一直是看球状态
 
 // 智能动作 act → 用哪张图 + 配什么动效
 const ACT_MAP = {
@@ -347,17 +347,15 @@ let lastSpokeAt = 0, loopTimer = null;
 
 function applyStealth(scene) {
   curScene = scene;
-  // 只有真在看球才切看球造型;其它一律日常电脑搭子(不再按场景静默/淡化)
-  const wantSoccer = (scene === "sports");
-  if (wantSoccer !== soccerMode) { soccerMode = wantSoccer; if (charEl) charEl.src = poseImg("calm"); }
-  ballEl.style.display = soccerMode ? "block" : "none";
+  // 足球魂常驻:造型/足球永远在,不再按场景切换
+  ballEl.style.display = "block";
   applyVisibility("show");
 }
 
 function scheduleNext(scene) {
   clearTimeout(loopTimer);
   if (!running) return;
-  const ms = scene === "sports" ? Math.min(cfg.interval, 3000) : cfg.interval;
+  const ms = scene === "sports" ? Math.min(cfg.interval, 2000) : cfg.interval;
   loopTimer = setTimeout(tick, ms);
 }
 
@@ -639,7 +637,7 @@ document.getElementById("team").onchange = (e) => {
 // 启动
 syncSettingsUI();
 refreshKeyUI();
-ballEl.style.display = "none";
+ballEl.style.display = "block";
 ballIdle();
 if (cfg.runtime === "rig" || cfg.runtime === "live2d") setRuntime(cfg.runtime);
 autoStart();
